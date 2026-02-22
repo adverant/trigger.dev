@@ -7,6 +7,7 @@ import {
   ServiceName,
   HealthStatus,
 } from '../database/repositories/integration-config.repository';
+import { TaskTemplateRepository, TaskTemplate } from '../database/repositories/task-template.repository';
 import { NexusConfig } from '../config';
 import { WS_EVENTS } from '../websocket/events';
 import { emitToOrg } from '../websocket/socket-server';
@@ -17,8 +18,12 @@ const logger = createLogger({ component: 'api-integrations' });
 
 /**
  * Transform backend IntegrationConfig to the format the UI expects.
+ * Populates taskTemplates from the DB instead of hardcoded [].
  */
-function toUIIntegration(config: any): Record<string, any> {
+function toUIIntegration(
+  config: any,
+  templates: TaskTemplate[] = []
+): Record<string, any> {
   const serviceName = config.serviceName || '';
   return {
     id: config.configId || serviceName,
@@ -32,7 +37,13 @@ function toUIIntegration(config: any): Record<string, any> {
     lastCheckAt: config.lastHealthCheck
       ? (config.lastHealthCheck.toISOString?.() ?? String(config.lastHealthCheck))
       : null,
-    taskTemplates: [],
+    taskTemplates: templates.map((t) => ({
+      id: t.templateId,
+      name: t.name,
+      description: t.description,
+      taskIdentifier: t.taskIdentifier,
+      defaultPayload: t.defaultPayload,
+    })),
     config: config.config || {},
   };
 }
@@ -59,7 +70,8 @@ const updateIntegrationSchema = Joi.object({
 export function createIntegrationRouter(
   integrationConfigRepo: IntegrationConfigRepository,
   nexusConfig: NexusConfig,
-  io: SocketIOServer
+  io: SocketIOServer,
+  taskTemplateRepo?: TaskTemplateRepository
 ): Router {
   const router = Router();
 
@@ -68,6 +80,11 @@ export function createIntegrationRouter(
     '/',
     asyncHandler(async (req: Request, res: Response) => {
       const configs = await integrationConfigRepo.findByOrgId(req.user!.organizationId);
+
+      // Load all task templates grouped by service
+      const templateMap = taskTemplateRepo
+        ? await taskTemplateRepo.findAllGroupedByService()
+        : new Map<string, TaskTemplate[]>();
 
       // Fill in defaults for services that haven't been configured yet
       const configMap = new Map(configs.map((c) => [c.serviceName, c]));
@@ -92,7 +109,9 @@ export function createIntegrationRouter(
 
       res.json({
         success: true,
-        data: allConfigs.map(toUIIntegration),
+        data: allConfigs.map((c) =>
+          toUIIntegration(c, templateMap.get(c.serviceName) || [])
+        ),
       });
     })
   );
@@ -322,6 +341,114 @@ export function createIntegrationRouter(
           enabled: config?.enabled || false,
         },
       });
+    })
+  );
+
+  // =========================================================================
+  // Task Template endpoints
+  // =========================================================================
+
+  // GET /:serviceName/templates - List templates for a service
+  router.get(
+    '/:serviceName/templates',
+    asyncHandler(async (req: Request, res: Response) => {
+      const serviceName = req.params.serviceName as ServiceName;
+      if (!VALID_SERVICES.includes(serviceName)) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: `Invalid service name: ${serviceName}` },
+        });
+        return;
+      }
+
+      if (!taskTemplateRepo) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+
+      const templates = await taskTemplateRepo.findByService(serviceName);
+      res.json({ success: true, data: templates });
+    })
+  );
+
+  // POST /:serviceName/templates - Create a custom template
+  router.post(
+    '/:serviceName/templates',
+    asyncHandler(async (req: Request, res: Response) => {
+      const serviceName = req.params.serviceName as ServiceName;
+      if (!VALID_SERVICES.includes(serviceName)) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: `Invalid service name: ${serviceName}` },
+        });
+        return;
+      }
+
+      if (!taskTemplateRepo) {
+        res.status(501).json({
+          success: false,
+          error: { code: 'NOT_IMPLEMENTED', message: 'Task templates not available' },
+        });
+        return;
+      }
+
+      const { name, description, taskIdentifier, defaultPayload, schema } = req.body;
+      if (!name || !taskIdentifier) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'name and taskIdentifier are required' },
+        });
+        return;
+      }
+
+      const template = await taskTemplateRepo.create({
+        serviceName,
+        name,
+        description,
+        taskIdentifier,
+        defaultPayload,
+        schema,
+      });
+
+      logger.info('Task template created', { templateId: template.templateId, serviceName });
+
+      res.status(201).json({ success: true, data: template });
+    })
+  );
+
+  // DELETE /:serviceName/templates/:templateId - Delete a template
+  router.delete(
+    '/:serviceName/templates/:templateId',
+    asyncHandler(async (req: Request, res: Response) => {
+      const serviceName = req.params.serviceName as ServiceName;
+      if (!VALID_SERVICES.includes(serviceName)) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: `Invalid service name: ${serviceName}` },
+        });
+        return;
+      }
+
+      if (!taskTemplateRepo) {
+        res.status(501).json({
+          success: false,
+          error: { code: 'NOT_IMPLEMENTED', message: 'Task templates not available' },
+        });
+        return;
+      }
+
+      const deleted = await taskTemplateRepo.delete(req.params.templateId);
+      if (!deleted) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Template not found' },
+        });
+        return;
+      }
+
+      logger.info('Task template deleted', { templateId: req.params.templateId, serviceName });
+
+      res.json({ success: true });
     })
   );
 

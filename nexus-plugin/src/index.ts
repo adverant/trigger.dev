@@ -56,6 +56,7 @@ import { IntegrationConfigRepository } from './database/repositories/integration
 import { WebhookRepository } from './database/repositories/webhook.repository';
 import { UsageRepository } from './database/repositories/usage.repository';
 import { TaskDefinitionRepository } from './database/repositories/task-definition.repository';
+import { TaskTemplateRepository } from './database/repositories/task-template.repository';
 
 // Import Trigger.dev client factory
 import { createTriggerClients } from './config/trigger-client';
@@ -140,6 +141,7 @@ class NexusTriggerServer {
       const webhookRepo = new WebhookRepository(this.db);
       const usageRepo = new UsageRepository(this.db);
       const taskDefRepo = new TaskDefinitionRepository(this.db);
+      const taskTemplateRepo = new TaskTemplateRepository(this.db);
 
       // Initialize Trigger.dev SDK and Management API client
       const triggerClients = createTriggerClients(this.config.trigger);
@@ -188,7 +190,8 @@ class NexusTriggerServer {
         waitpointService,
         deploymentService,
         queueService,
-        integrationConfigRepo
+        integrationConfigRepo,
+        taskTemplateRepo
       );
 
       // Serve UI static files
@@ -377,7 +380,8 @@ class NexusTriggerServer {
     waitpointService: WaitpointService,
     deploymentService: DeploymentService,
     queueService: QueueService,
-    integrationConfigRepo: IntegrationConfigRepository
+    integrationConfigRepo: IntegrationConfigRepository,
+    taskTemplateRepo: TaskTemplateRepository
   ): void {
     const apiRouter = express.Router();
 
@@ -399,7 +403,7 @@ class NexusTriggerServer {
     apiRouter.use('/environments', createEnvironmentRouter(triggerProxy));
     apiRouter.use('/deployments', createDeploymentRouter(deploymentService));
     apiRouter.use('/queues', createQueueRouter(queueService, this.io));
-    apiRouter.use('/integrations', createIntegrationRouter(integrationConfigRepo, this.config.nexus, this.io));
+    apiRouter.use('/integrations', createIntegrationRouter(integrationConfigRepo, this.config.nexus, this.io, taskTemplateRepo));
 
     this.app.use('/trigger/api/v1', apiRouter);
 
