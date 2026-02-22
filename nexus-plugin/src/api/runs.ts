@@ -2,10 +2,35 @@ import { Router, Request, Response } from 'express';
 import { Server as SocketIOServer } from 'socket.io';
 import Joi from 'joi';
 import { RunService } from '../services/run.service';
+import { Run } from '../database/repositories/run.repository';
 import { asyncHandler } from '../middleware/error-handler';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger({ component: 'api-runs' });
+
+/**
+ * Transform backend Run to the format the UI expects.
+ */
+function toUIRun(run: Run): Record<string, any> {
+  return {
+    id: run.runId,
+    taskId: run.taskIdentifier,
+    taskSlug: run.taskIdentifier,
+    status: run.status,
+    payload: run.payload,
+    output: run.output,
+    error: run.errorMessage,
+    startedAt: run.startedAt ? run.startedAt.toISOString?.() ?? String(run.startedAt) : null,
+    completedAt: run.completedAt ? run.completedAt.toISOString?.() ?? String(run.completedAt) : null,
+    duration: run.durationMs,
+    tags: run.tags || [],
+    createdAt: run.createdAt ? run.createdAt.toISOString?.() ?? String(run.createdAt) : new Date().toISOString(),
+    updatedAt: run.createdAt ? run.createdAt.toISOString?.() ?? String(run.createdAt) : new Date().toISOString(),
+    isTest: run.isTest || false,
+    idempotencyKey: run.idempotencyKey,
+    version: undefined,
+  };
+}
 
 const listRunsSchema = Joi.object({
   projectId: Joi.string().uuid().optional(),
@@ -79,7 +104,12 @@ export function createRunRouter(
 
       res.json({
         success: true,
-        data: result.runs,
+        data: result.runs.map(toUIRun),
+        meta: {
+          total: result.total,
+          limit: value.limit || 50,
+          offset: value.offset || 0,
+        },
         pagination: {
           total: result.total,
           limit: value.limit || 50,

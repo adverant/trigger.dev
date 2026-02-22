@@ -7,6 +7,27 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger({ component: 'api-tasks' });
 
+/**
+ * Transform backend TaskDefinition to the format the UI expects.
+ */
+function toUITask(task: any): Record<string, any> {
+  return {
+    id: task.taskDefId || task.id,
+    slug: task.taskIdentifier || task.slug,
+    filePath: task.filePath || '',
+    exportName: task.exportName || task.taskIdentifier || '',
+    version: task.taskVersion || task.version || '1',
+    queue: task.queueName || task.queue || 'default',
+    machinePreset: task.machinePreset,
+    triggerSource: task.isNexusIntegration ? 'nexus' : 'trigger',
+    retry: task.retryConfig || undefined,
+    schema: task.inputSchema || undefined,
+    nexusIntegration: task.nexusService || undefined,
+    createdAt: task.createdAt ? (task.createdAt.toISOString?.() ?? String(task.createdAt)) : new Date().toISOString(),
+    updatedAt: task.updatedAt ? (task.updatedAt.toISOString?.() ?? String(task.updatedAt)) : new Date().toISOString(),
+  };
+}
+
 const triggerTaskSchema = Joi.object({
   projectId: Joi.string().uuid().required(),
   payload: Joi.any().required(),
@@ -66,7 +87,7 @@ export function createTaskRouter(
 
       res.json({
         success: true,
-        data: tasks,
+        data: tasks.map(toUITask),
       });
     })
   );
