@@ -210,10 +210,10 @@ export class CVATClient {
   async healthCheck(): Promise<HealthCheckResponse> {
     const start = Date.now();
     try {
-      const response = await this.client.get("/health");
+      const response = await this.client.get("/api/server/about");
       const latency = Date.now() - start;
       return {
-        status: response.data?.status === "ok" ? "healthy" : "degraded",
+        status: response.data?.version ? "healthy" : "degraded",
         latency,
       };
     } catch (error) {

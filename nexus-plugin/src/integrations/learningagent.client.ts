@@ -170,7 +170,7 @@ export class LearningAgentClient {
       const response = await this.client.get("/health");
       const latency = Date.now() - start;
       return {
-        status: response.data?.status === "ok" ? "healthy" : "degraded",
+        status: ["ok", "healthy"].includes(response.data?.status) ? "healthy" : "degraded",
         latency,
       };
     } catch (error) {

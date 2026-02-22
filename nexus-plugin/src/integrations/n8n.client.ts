@@ -200,10 +200,10 @@ export class N8NClient {
   async healthCheck(): Promise<HealthCheckResponse> {
     const start = Date.now();
     try {
-      const response = await this.client.get("/health");
+      const response = await this.client.get("/healthz");
       const latency = Date.now() - start;
       return {
-        status: response.data?.status === "ok" ? "healthy" : "degraded",
+        status: ["ok", "healthy"].includes(response.data?.status) ? "healthy" : "degraded",
         latency,
       };
     } catch (error) {
