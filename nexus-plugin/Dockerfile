@@ -88,6 +88,9 @@ LABEL org.opencontainers.image.title="Nexus Trigger.dev Plugin" \
 
 WORKDIR /app
 
+# Create logs directory (winston-daily-rotate-file needs it writable)
+RUN mkdir -p /app/logs && chown 1001:1001 /app/logs
+
 # Copy compiled backend
 COPY --from=backend-builder --chown=1001:1001 /app/dist ./dist
 COPY --from=backend-builder --chown=1001:1001 /app/node_modules ./node_modules
