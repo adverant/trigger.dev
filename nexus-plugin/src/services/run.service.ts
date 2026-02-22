@@ -17,7 +17,7 @@ export class RunService {
 
   async listRuns(
     orgId: string,
-    projectId: string,
+    projectId?: string,
     filters?: RunFilters
   ): Promise<{ runs: Run[]; total: number }> {
     // Fetch from local database with enrichment

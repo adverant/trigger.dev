@@ -57,18 +57,11 @@ export function createTaskRouter(
   router.get(
     '/',
     asyncHandler(async (req: Request, res: Response) => {
-      const projectId = req.query.projectId as string;
-      if (!projectId) {
-        res.status(400).json({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: 'projectId query parameter is required' },
-        });
-        return;
-      }
+      const projectId = req.query.projectId as string | undefined;
 
       const tasks = await taskService.listTaskDefinitions(
         req.user!.organizationId,
-        projectId
+        projectId || undefined
       );
 
       res.json({

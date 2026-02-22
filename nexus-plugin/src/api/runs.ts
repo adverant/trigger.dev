@@ -8,16 +8,19 @@ import { createLogger } from '../utils/logger';
 const logger = createLogger({ component: 'api-runs' });
 
 const listRunsSchema = Joi.object({
-  projectId: Joi.string().uuid().required(),
+  projectId: Joi.string().uuid().optional(),
   status: Joi.alternatives()
     .try(Joi.string(), Joi.array().items(Joi.string()))
     .optional(),
   taskIdentifier: Joi.string().optional(),
+  taskId: Joi.string().optional(),
   tags: Joi.alternatives()
     .try(Joi.string(), Joi.array().items(Joi.string()))
     .optional(),
   startDate: Joi.date().iso().optional(),
   endDate: Joi.date().iso().optional(),
+  from: Joi.date().iso().optional(),
+  to: Joi.date().iso().optional(),
   limit: Joi.number().integer().min(1).max(200).optional(),
   offset: Joi.number().integer().min(0).optional(),
 });
@@ -62,13 +65,13 @@ export function createRunRouter(
 
       const result = await runService.listRuns(
         req.user!.organizationId,
-        value.projectId,
+        value.projectId || undefined,
         {
           status: statusFilter ? statusFilter[0] as any : undefined,
-          taskIdentifier: value.taskIdentifier,
+          taskIdentifier: value.taskIdentifier || value.taskId,
           tags: tagsFilter,
-          startDate: value.startDate,
-          endDate: value.endDate,
+          startDate: value.startDate || value.from,
+          endDate: value.endDate || value.to,
           limit: value.limit,
           offset: value.offset,
         }

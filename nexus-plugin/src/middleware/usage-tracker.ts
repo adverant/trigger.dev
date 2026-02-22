@@ -17,13 +17,8 @@ const INSERT_USAGE_METRIC = `
   INSERT INTO trigger.usage_metrics (
     organization_id,
     metric_type,
-    endpoint,
-    method,
-    status_code,
-    duration_ms,
-    user_id,
-    recorded_at
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    metadata
+  ) VALUES ($1, $2, $3)
 `;
 
 /**
@@ -45,11 +40,13 @@ async function recordUsageMetric(
     await pool.query(INSERT_USAGE_METRIC, [
       data.organizationId,
       data.metricType,
-      data.endpoint,
-      data.method,
-      data.statusCode,
-      data.durationMs,
-      data.userId || null,
+      JSON.stringify({
+        endpoint: data.endpoint,
+        method: data.method,
+        status_code: data.statusCode,
+        duration_ms: data.durationMs,
+        user_id: data.userId || null,
+      }),
     ]);
 
     usageMetricsRecorded.inc({
