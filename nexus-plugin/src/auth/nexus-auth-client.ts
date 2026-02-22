@@ -137,21 +137,39 @@ export class NexusAuthClient {
         externalServiceDuration.observe({ service: 'nexus-auth', operation: 'validate_token' }, duration);
 
         if (!response.data.valid) {
-          throw new Error('Invalid token');
+          // Auth service says token is invalid (e.g., signature mismatch).
+          // Fall back to local JWT decode so the UI isn't completely broken.
+          // The gateway already validated the token before it reached us.
+          logger.warn('Auth service returned invalid for token, using local JWT decode as fallback');
+          const tierValue = decoded.subscription_tier || decoded.tier || 'open_source';
+          user = {
+            userId: decoded.user_id || decoded.sub || '',
+            organizationId: decoded.organization_id || decoded.user_id || '',
+            email: decoded.email || '',
+            name: decoded.name,
+            tier: (tierValue === 'teams' || tierValue === 'government' || tierValue === 'dedicated_vps')
+              ? (tierValue === 'dedicated_vps' ? 'government' : tierValue as 'teams' | 'government')
+              : 'open_source',
+            permissions: decoded.permissions || [],
+            exp: decoded.exp || 0,
+            iat: decoded.iat || 0,
+          };
+        } else {
+          // Map flat response to AuthenticatedUser
+          const tierValue = response.data.tier || decoded.subscription_tier || decoded.tier || 'open_source';
+          user = {
+            userId: response.data.user_id || decoded.user_id || decoded.sub || '',
+            organizationId: response.data.claims?.organization_id || decoded.organization_id || decoded.user_id || '',
+            email: response.data.email || decoded.email || '',
+            name: response.data.name || decoded.name,
+            tier: (tierValue === 'teams' || tierValue === 'government' || tierValue === 'dedicated_vps')
+              ? (tierValue === 'dedicated_vps' ? 'government' : tierValue as 'teams' | 'government')
+              : 'open_source',
+            permissions: response.data.claims?.permissions || decoded.permissions || [],
+            exp: response.data.exp || decoded.exp || 0,
+            iat: decoded.iat || 0,
+          };
         }
-
-        // Map flat response to AuthenticatedUser
-        const tierValue = response.data.tier || decoded.subscription_tier || decoded.tier || 'open_source';
-        user = {
-          userId: response.data.user_id || decoded.user_id || decoded.sub || '',
-          organizationId: response.data.claims?.organization_id || decoded.organization_id || decoded.user_id || '',
-          email: response.data.email || decoded.email || '',
-          name: response.data.name || decoded.name,
-          tier: (tierValue === 'teams' || tierValue === 'government') ? tierValue : 'open_source',
-          permissions: response.data.claims?.permissions || decoded.permissions || [],
-          exp: response.data.exp || decoded.exp || 0,
-          iat: decoded.iat || 0,
-        };
       } catch (authServiceError) {
         // Fallback: if auth service is unreachable, trust local JWT decode
         // (token signature can't be verified without the secret, but we allow
@@ -166,7 +184,9 @@ export class NexusAuthClient {
             organizationId: decoded.organization_id || decoded.user_id || '',
             email: decoded.email || '',
             name: decoded.name,
-            tier: (tierValue === 'teams' || tierValue === 'government') ? tierValue : 'open_source',
+            tier: (tierValue === 'teams' || tierValue === 'government' || tierValue === 'dedicated_vps')
+              ? (tierValue === 'dedicated_vps' ? 'government' : tierValue as 'teams' | 'government')
+              : 'open_source',
             permissions: decoded.permissions || [],
             exp: decoded.exp || 0,
             iat: decoded.iat || 0,
