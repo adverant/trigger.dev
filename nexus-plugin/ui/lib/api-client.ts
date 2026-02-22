@@ -33,10 +33,13 @@ class TriggerApiClient {
   private getAuthToken(): string | null {
     if (typeof window === 'undefined') return null;
 
-    const stored = localStorage.getItem('trigger_auth_token');
-    if (stored) return stored;
+    // Read JWT from the main Nexus dashboard's localStorage (same origin)
+    const dashboardToken = localStorage.getItem('dashboard_token');
+    if (dashboardToken) return dashboardToken;
 
-    const match = document.cookie.match(/(?:^|;\s*)trigger_token=([^;]*)/);
+    // Fallback: check Nexus cookie names
+    const cookiePattern = /(?:^|;\s*)(?:nexus-auth|nexus_ml_session|auth-token)=([^;]*)/;
+    const match = document.cookie.match(cookiePattern);
     return match ? decodeURIComponent(match[1]) : null;
   }
 

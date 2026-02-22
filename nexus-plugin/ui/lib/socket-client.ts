@@ -68,9 +68,11 @@ export function getSocket(): Socket {
 
   let authToken: string | null = null;
   if (typeof window !== 'undefined') {
-    authToken = localStorage.getItem('trigger_auth_token');
+    // Read JWT from the main Nexus dashboard's localStorage (same origin)
+    authToken = localStorage.getItem('dashboard_token');
     if (!authToken) {
-      const match = document.cookie.match(/(?:^|;\s*)trigger_token=([^;]*)/);
+      const cookiePattern = /(?:^|;\s*)(?:nexus-auth|nexus_ml_session|auth-token)=([^;]*)/;
+      const match = document.cookie.match(cookiePattern);
       authToken = match ? decodeURIComponent(match[1]) : null;
     }
   }

@@ -28,30 +28,30 @@ export interface AuthenticatedUser {
   iat: number;
 }
 
+// Matches actual /internal/validate response from nexus-auth
 interface TokenValidationResponse {
   valid: boolean;
-  user?: {
-    id: string;
-    organization_id: string;
-    email: string;
-    name?: string;
-    tier: string;
-    permissions: string[];
+  user_id?: string;
+  email?: string;
+  name?: string;
+  tier?: string;
+  exp?: number;
+  claims?: {
+    permissions?: string[];
+    jti?: string;
+    organization_id?: string;
   };
-  error?: string;
 }
 
+// Matches actual /internal/validate-mcp response
 interface ApiKeyValidationResponse {
   valid: boolean;
-  user?: {
-    id: string;
-    organization_id: string;
-    email: string;
-    name?: string;
-    tier: string;
-    permissions: string[];
-  };
-  error?: string;
+  user_id?: string;
+  organization_id?: string;
+  email?: string;
+  name?: string;
+  tier?: string;
+  permissions?: string[];
 }
 
 export class NexusAuthClient {
@@ -124,29 +124,57 @@ export class NexusAuthClient {
         throw new Error('Token expired');
       }
 
-      const response = await this.httpClient.post<TokenValidationResponse>(
-        '/v1/auth/validate',
-        { token }
-      );
+      let user: AuthenticatedUser;
 
-      const duration = (Date.now() - start) / 1000;
-      externalServiceDuration.observe({ service: 'nexus-auth', operation: 'validate_token' }, duration);
+      try {
+        // Validate via nexus-auth /internal/validate endpoint
+        const response = await this.httpClient.post<TokenValidationResponse>(
+          '/internal/validate',
+          { token }
+        );
 
-      if (!response.data.valid || !response.data.user) {
-        throw new Error(response.data.error || 'Invalid token');
+        const duration = (Date.now() - start) / 1000;
+        externalServiceDuration.observe({ service: 'nexus-auth', operation: 'validate_token' }, duration);
+
+        if (!response.data.valid) {
+          throw new Error('Invalid token');
+        }
+
+        // Map flat response to AuthenticatedUser
+        const tierValue = response.data.tier || decoded.subscription_tier || decoded.tier || 'open_source';
+        user = {
+          userId: response.data.user_id || decoded.user_id || decoded.sub || '',
+          organizationId: response.data.claims?.organization_id || decoded.organization_id || decoded.user_id || '',
+          email: response.data.email || decoded.email || '',
+          name: response.data.name || decoded.name,
+          tier: (tierValue === 'teams' || tierValue === 'government') ? tierValue : 'open_source',
+          permissions: response.data.claims?.permissions || decoded.permissions || [],
+          exp: response.data.exp || decoded.exp || 0,
+          iat: decoded.iat || 0,
+        };
+      } catch (authServiceError) {
+        // Fallback: if auth service is unreachable, trust local JWT decode
+        // (token signature can't be verified without the secret, but we allow
+        // degraded operation so the UI isn't completely broken)
+        if (axios.isAxiosError(authServiceError) && !authServiceError.response) {
+          logger.warn('Auth service unreachable, using local JWT decode as fallback', {
+            error: authServiceError.message,
+          });
+          const tierValue = decoded.subscription_tier || decoded.tier || 'open_source';
+          user = {
+            userId: decoded.user_id || decoded.sub || '',
+            organizationId: decoded.organization_id || decoded.user_id || '',
+            email: decoded.email || '',
+            name: decoded.name,
+            tier: (tierValue === 'teams' || tierValue === 'government') ? tierValue : 'open_source',
+            permissions: decoded.permissions || [],
+            exp: decoded.exp || 0,
+            iat: decoded.iat || 0,
+          };
+        } else {
+          throw authServiceError;
+        }
       }
-
-      const tierValue = response.data.user.tier || 'open_source';
-      const user: AuthenticatedUser = {
-        userId: response.data.user.id,
-        organizationId: response.data.user.organization_id,
-        email: response.data.user.email,
-        name: response.data.user.name,
-        tier: (tierValue === 'teams' || tierValue === 'government') ? tierValue : 'open_source',
-        permissions: response.data.user.permissions || [],
-        exp: decoded.exp || 0,
-        iat: decoded.iat || 0,
-      };
 
       if (this.redis) {
         await this.cacheToken(token, user);
@@ -189,25 +217,25 @@ export class NexusAuthClient {
     const start = Date.now();
     try {
       const response = await this.httpClient.post<ApiKeyValidationResponse>(
-        '/v1/auth/validate-api-key',
+        '/internal/validate-mcp',
         { apiKey }
       );
 
       const duration = (Date.now() - start) / 1000;
       externalServiceDuration.observe({ service: 'nexus-auth', operation: 'validate_api_key' }, duration);
 
-      if (!response.data.valid || !response.data.user) {
-        throw new Error(response.data.error || 'Invalid API key');
+      if (!response.data.valid) {
+        throw new Error('Invalid API key');
       }
 
-      const tierValue = response.data.user.tier || 'open_source';
+      const tierValue = response.data.tier || 'open_source';
       const user: AuthenticatedUser = {
-        userId: response.data.user.id,
-        organizationId: response.data.user.organization_id,
-        email: response.data.user.email,
-        name: response.data.user.name,
+        userId: response.data.user_id || '',
+        organizationId: response.data.organization_id || response.data.user_id || '',
+        email: response.data.email || '',
+        name: response.data.name,
         tier: (tierValue === 'teams' || tierValue === 'government') ? tierValue : 'open_source',
-        permissions: response.data.user.permissions || [],
+        permissions: response.data.permissions || [],
         exp: Math.floor(Date.now() / 1000) + 3600,
         iat: Math.floor(Date.now() / 1000),
       };
