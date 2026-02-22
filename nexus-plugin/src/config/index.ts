@@ -124,10 +124,10 @@ export function loadConfig(): AppConfig {
       learningagent: optionalEnv('LEARNINGAGENT_URL', 'http://nexus-learningagent:8094'),
       geoagent: optionalEnv('GEOAGENT_URL', 'http://geoagent:9095'),
       jupyter: optionalEnv('JUPYTER_URL', 'http://jupyterhub:8000'),
-      cvat: optionalEnv('CVAT_URL', 'http://cvat-backend:8080'),
+      cvat: optionalEnv('CVAT_URL', 'http://cvat:8080'),
       gpuBridge: optionalEnv('GPU_BRIDGE_URL', ''),
       sandbox: optionalEnv('SANDBOX_URL', ''),
-      n8n: optionalEnv('N8N_URL', 'http://n8n-main:5678'),
+      n8n: optionalEnv('N8N_URL', 'http://n8n-63b9f471:80'),
     },
   };
 
