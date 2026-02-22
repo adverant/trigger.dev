@@ -14,7 +14,7 @@ export interface RunUpdateEvent {
   runId: string;
   taskId: string;
   status: RunStatus;
-  output?: unknown;
+  output?: any;
   error?: string;
   startedAt?: string;
   completedAt?: string;
@@ -25,7 +25,7 @@ export interface RunLogEvent {
   level: 'info' | 'warn' | 'error' | 'debug';
   message: string;
   timestamp: string;
-  data?: unknown;
+  data?: any;
 }
 
 export interface TaskSyncEvent {

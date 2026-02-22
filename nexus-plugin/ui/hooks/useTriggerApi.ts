@@ -76,8 +76,8 @@ export interface Run {
   taskId: string;
   taskSlug: string;
   status: string;
-  payload?: unknown;
-  output?: unknown;
+  payload?: any;
+  output?: any;
   error?: string;
   startedAt?: string;
   completedAt?: string;
@@ -96,7 +96,7 @@ export interface Schedule {
   cron: string;
   timezone: string;
   enabled: boolean;
-  payload?: unknown;
+  payload?: any;
   lastRunId?: string;
   lastRunAt?: string;
   nextRunAt?: string;
@@ -110,8 +110,8 @@ export interface Waitpoint {
   taskId: string;
   runId: string;
   description: string;
-  inputData?: unknown;
-  outputData?: unknown;
+  inputData?: any;
+  outputData?: any;
   status: 'pending' | 'resolved' | 'expired';
   expiresAt?: string;
   resolvedAt?: string;
