@@ -1,0 +1,164 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nexus-trigger-network-policy
+  namespace: nexus
+  labels:
+    app: nexus-trigger
+    app.kubernetes.io/name: nexus-trigger
+    app.kubernetes.io/component: security
+spec:
+  podSelector:
+    matchLabels:
+      app: nexus-trigger
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from Istio ingress gateway
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+          podSelector:
+            matchLabels:
+              istio: ingressgateway
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow traffic from within nexus namespace (mesh traffic)
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # DNS resolution (kube-dns)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # nexus-auth (required)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: nexus-auth
+      ports:
+        - protocol: TCP
+          port: 8080
+    # nexus-graphrag
+    - to:
+        - podSelector:
+            matchLabels:
+              app: nexus-graphrag
+      ports:
+        - protocol: TCP
+          port: 9050
+        - protocol: TCP
+          port: 9051
+    # nexus-mageagent
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mageagent
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 8081
+    # nexus-fileprocess
+    - to:
+        - podSelector:
+            matchLabels:
+              app: nexus-fileprocess
+      ports:
+        - protocol: TCP
+          port: 8080
+    # nexus-learningagent
+    - to:
+        - podSelector:
+            matchLabels:
+              app: nexus-learningagent
+      ports:
+        - protocol: TCP
+          port: 8080
+    # nexus-sandbox
+    - to:
+        - podSelector:
+            matchLabels:
+              app: nexus-sandbox
+      ports:
+        - protocol: TCP
+          port: 8080
+    # nexus-jupyter
+    - to:
+        - podSelector:
+            matchLabels:
+              app: nexus-jupyter
+      ports:
+        - protocol: TCP
+          port: 8888
+    # nexus-cvat
+    - to:
+        - podSelector:
+            matchLabels:
+              app: nexus-cvat
+      ports:
+        - protocol: TCP
+          port: 8080
+    # nexus-gpu-bridge
+    - to:
+        - podSelector:
+            matchLabels:
+              app: nexus-gpu-bridge
+      ports:
+        - protocol: TCP
+          port: 8080
+    # nexus-n8n
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: n8n
+      ports:
+        - protocol: TCP
+          port: 5678
+    # trigger-dev-webapp (self-hosted Trigger.dev)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: trigger-dev-webapp
+      ports:
+        - protocol: TCP
+          port: 3030
+    # PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app: nexus-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              app: nexus-redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # External HTTPS (Trigger.dev cloud, external APIs)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443

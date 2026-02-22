@@ -1,0 +1,153 @@
+name: Upstream Sync
+
+on:
+  schedule:
+    # Weekly on Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Force sync even if already up to date"
+        required: false
+        default: "false"
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    name: Sync with upstream Trigger.dev
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/triggerdotdev/trigger.dev.git || true
+          git fetch upstream main
+
+      - name: Check commits behind
+        id: check
+        run: |
+          BEHIND=$(git rev-list --count HEAD..upstream/main)
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+          echo "Commits behind upstream: $BEHIND"
+
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          echo "upstream_sha=${UPSTREAM_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+          CURRENT_SHA=$(git rev-parse HEAD)
+          echo "current_sha=${CURRENT_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Create sync branch and merge
+        if: steps.check.outputs.behind != '0' || github.event.inputs.force == 'true'
+        id: merge
+        run: |
+          BRANCH_NAME="upstream-sync/$(date +%Y-%m-%d)"
+          echo "branch=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
+
+          git checkout -b "$BRANCH_NAME"
+
+          # Attempt merge, preserving our nexus-plugin directory
+          if git merge upstream/main --no-edit; then
+            echo "merge_status=clean" >> "$GITHUB_OUTPUT"
+          else
+            # Check if conflicts are only in our added files
+            CONFLICTED=$(git diff --name-only --diff-filter=U)
+            echo "Conflicted files:"
+            echo "$CONFLICTED"
+            echo "merge_status=conflicts" >> "$GITHUB_OUTPUT"
+            echo "conflicted_files<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$CONFLICTED" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+
+            # For conflicts in nexus-plugin/, keep ours
+            git diff --name-only --diff-filter=U | grep '^nexus-plugin/' | while read -r file; do
+              git checkout --ours "$file"
+              git add "$file"
+            done
+
+            # For conflicts in .github/workflows/ that we added, keep ours
+            for f in .github/workflows/upstream-sync.yml .github/workflows/nexus-plugin-ci.yml; do
+              if git diff --name-only --diff-filter=U | grep -q "^$f$"; then
+                git checkout --ours "$f"
+                git add "$f"
+              fi
+            done
+
+            # Check if there are remaining conflicts
+            REMAINING=$(git diff --name-only --diff-filter=U 2>/dev/null || true)
+            if [ -n "$REMAINING" ]; then
+              echo "remaining_conflicts=true" >> "$GITHUB_OUTPUT"
+              echo "Remaining conflicts require manual resolution:"
+              echo "$REMAINING"
+              # Abort merge if there are unresolvable conflicts
+              git merge --abort
+              exit 1
+            fi
+
+            git commit --no-edit
+          fi
+
+          git push origin "$BRANCH_NAME"
+
+      - name: Create Pull Request
+        if: (steps.check.outputs.behind != '0' || github.event.inputs.force == 'true') && steps.merge.outputs.merge_status != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BEHIND=${{ steps.check.outputs.behind }}
+          UPSTREAM_SHA=${{ steps.check.outputs.upstream_sha }}
+          CURRENT_SHA=${{ steps.check.outputs.current_sha }}
+          MERGE_STATUS=${{ steps.merge.outputs.merge_status }}
+
+          BODY="## Upstream Sync
+
+          Syncing with [triggerdotdev/trigger.dev](https://github.com/triggerdotdev/trigger.dev) main branch.
+
+          **Commits behind:** ${BEHIND}
+          **Current SHA:** \`${CURRENT_SHA}\`
+          **Upstream SHA:** \`${UPSTREAM_SHA}\`
+          **Merge status:** ${MERGE_STATUS}
+
+          ### Changes from upstream
+          \`\`\`
+          $(git log --oneline HEAD~${BEHIND}..HEAD --no-merges | head -50)
+          \`\`\`
+
+          ### Nexus plugin files
+          Our \`nexus-plugin/\` directory and custom workflows are preserved during the merge.
+
+          ---
+          *This PR was automatically created by the upstream-sync workflow.*"
+
+          gh pr create \
+            --title "chore: Sync with upstream Trigger.dev (${UPSTREAM_SHA})" \
+            --body "$BODY" \
+            --base main \
+            --head "${{ steps.merge.outputs.branch }}" \
+            --label "upstream-sync"
+
+      - name: Summary
+        run: |
+          echo "## Upstream Sync Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commits behind:** ${{ steps.check.outputs.behind }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Current SHA:** \`${{ steps.check.outputs.current_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Upstream SHA:** \`${{ steps.check.outputs.upstream_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.check.outputs.behind }}" = "0" ]; then
+            echo "- **Status:** Already up to date" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- **Status:** PR created for review" >> "$GITHUB_STEP_SUMMARY"
+          fi

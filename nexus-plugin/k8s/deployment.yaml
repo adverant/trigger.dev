@@ -1,0 +1,309 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-trigger
+  namespace: nexus
+  labels:
+    app: nexus-trigger
+    app.kubernetes.io/name: nexus-trigger
+    app.kubernetes.io/component: plugin
+    app.kubernetes.io/part-of: nexus-stack
+    app.kubernetes.io/managed-by: kustomize
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nexus-trigger
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: nexus-trigger
+        app.kubernetes.io/name: nexus-trigger
+        app.kubernetes.io/component: plugin
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/trigger/metrics"
+        sidecar.istio.io/inject: "true"
+    spec:
+      serviceAccountName: nexus-trigger
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - nexus-trigger
+                topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: nexus-trigger
+          image: ghcr.io/adverant/nexus-trigger:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            # Application
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "8080"
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: LOG_LEVEL
+            # Trigger.dev
+            - name: TRIGGER_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: TRIGGER_API_URL
+            - name: TRIGGER_PROJECT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: TRIGGER_PROJECT_ID
+            - name: TRIGGER_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-trigger-secrets
+                  key: TRIGGER_SECRET_KEY
+            - name: TRIGGER_PAT
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-trigger-secrets
+                  key: TRIGGER_PAT
+            # Nexus Auth
+            - name: NEXUS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-trigger-secrets
+                  key: NEXUS_API_KEY
+            - name: NEXUS_AUTH_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: NEXUS_AUTH_URL
+            # PostgreSQL
+            - name: POSTGRES_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: POSTGRES_HOST
+            - name: POSTGRES_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: POSTGRES_PORT
+            - name: POSTGRES_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_SCHEMA
+              value: "trigger"
+            # Redis
+            - name: REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: REDIS_URL
+            # Nexus service URLs
+            - name: NEXUS_GRAPHRAG_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: NEXUS_GRAPHRAG_URL
+            - name: NEXUS_MAGEAGENT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: NEXUS_MAGEAGENT_URL
+            - name: NEXUS_FILEPROCESS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: NEXUS_FILEPROCESS_URL
+            - name: NEXUS_LEARNINGAGENT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: NEXUS_LEARNINGAGENT_URL
+            - name: NEXUS_SANDBOX_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: NEXUS_SANDBOX_URL
+            - name: NEXUS_JUPYTER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: NEXUS_JUPYTER_URL
+            - name: NEXUS_CVAT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: NEXUS_CVAT_URL
+            - name: NEXUS_GPU_BRIDGE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: NEXUS_GPU_BRIDGE_URL
+            - name: NEXUS_N8N_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: NEXUS_N8N_URL
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+          livenessProbe:
+            httpGet:
+              path: /trigger/live
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /trigger/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2
+          startupProbe:
+            httpGet:
+              path: /trigger/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 12
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: nexus-trigger-data
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nexus-trigger-data
+  namespace: nexus
+  labels:
+    app: nexus-trigger
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-trigger
+  namespace: nexus
+  labels:
+    app: nexus-trigger
+    app.kubernetes.io/name: nexus-trigger
+    app.kubernetes.io/component: plugin
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  selector:
+    app: nexus-trigger
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nexus-trigger
+  namespace: nexus
+  labels:
+    app: nexus-trigger
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nexus-trigger
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

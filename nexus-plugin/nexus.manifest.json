@@ -1,0 +1,595 @@
+{
+  "$schema": "https://api.adverant.ai/schemas/nexus-plugin-manifest-v1.json",
+  "id": "nexus-trigger",
+  "name": "Trigger.dev Integration",
+  "displayName": "Trigger.dev - Durable Execution Engine",
+  "version": "1.0.0",
+  "description": "Durable task execution, AI agent orchestration, cron scheduling, and human-in-the-loop workflows powered by Trigger.dev with deep integration into all Nexus services including GraphRAG, MageAgent, FileProcess, LearningAgent, GeoAgent, Jupyter, CVAT, GPU Bridge, and Sandbox",
+  "author": {
+    "name": "Adverant AI",
+    "email": "plugins@adverant.ai",
+    "url": "https://adverant.ai"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/adverant/trigger.dev"
+  },
+  "keywords": [
+    "trigger.dev",
+    "background-jobs",
+    "durable-execution",
+    "ai-agents",
+    "scheduling",
+    "automation",
+    "workflows",
+    "orchestration",
+    "cron",
+    "task-queue"
+  ],
+  "categories": [
+    "automation",
+    "orchestration",
+    "ai-agents",
+    "developer-tools"
+  ],
+  "visibility": "public",
+  "status": "beta",
+  "executionMode": "mcp_container",
+  "runtime": {
+    "engine": "node",
+    "version": ">=20.0.0"
+  },
+  "entrypoint": {
+    "type": "http",
+    "port": 8080,
+    "healthCheck": "/trigger/health",
+    "readinessCheck": "/trigger/ready",
+    "livenessCheck": "/trigger/live"
+  },
+  "api": {
+    "version": "v1",
+    "basePath": "/trigger/api/v1",
+    "documentation": "/trigger/api/docs",
+    "openapi": "/trigger/api/openapi.json",
+    "endpoints": [
+      {
+        "group": "tasks",
+        "path": "/tasks",
+        "methods": ["GET", "POST", "PUT", "DELETE"],
+        "description": "Create, list, update, and delete task definitions"
+      },
+      {
+        "group": "runs",
+        "path": "/runs",
+        "methods": ["GET", "POST"],
+        "description": "Trigger task runs, list executions, get run details and logs"
+      },
+      {
+        "group": "schedules",
+        "path": "/schedules",
+        "methods": ["GET", "POST", "PUT", "DELETE"],
+        "description": "Manage cron schedules and recurring task triggers"
+      },
+      {
+        "group": "workflows",
+        "path": "/workflows",
+        "methods": ["GET", "POST", "PUT", "DELETE"],
+        "description": "Multi-step durable workflows with branching and error handling"
+      },
+      {
+        "group": "integrations",
+        "path": "/integrations",
+        "methods": ["GET", "POST", "PUT", "DELETE"],
+        "description": "Configure connections to Nexus services and external APIs"
+      },
+      {
+        "group": "deployments",
+        "path": "/deployments",
+        "methods": ["GET", "POST"],
+        "description": "Deploy task code and manage deployment versions"
+      },
+      {
+        "group": "waitpoints",
+        "path": "/waitpoints",
+        "methods": ["GET", "POST", "PUT"],
+        "description": "Human-in-the-loop approval gates and external event waitpoints"
+      },
+      {
+        "group": "projects",
+        "path": "/projects",
+        "methods": ["GET", "POST", "PUT", "DELETE"],
+        "description": "Manage Trigger.dev projects and environments"
+      },
+      {
+        "group": "metrics",
+        "path": "/analytics",
+        "methods": ["GET"],
+        "description": "Task execution analytics, success rates, and performance metrics"
+      }
+    ]
+  },
+  "websocket": {
+    "enabled": true,
+    "path": "/trigger/ws",
+    "library": "socket.io",
+    "version": ">=4.7.0",
+    "adapter": "redis",
+    "events": [
+      "run.started",
+      "run.progress",
+      "run.completed",
+      "run.failed",
+      "run.cancelled",
+      "run.retrying",
+      "task.registered",
+      "task.updated",
+      "task.deleted",
+      "schedule.triggered",
+      "schedule.completed",
+      "schedule.failed",
+      "workflow.step.started",
+      "workflow.step.completed",
+      "workflow.completed",
+      "workflow.failed",
+      "waitpoint.created",
+      "waitpoint.resolved",
+      "waitpoint.expired",
+      "deployment.started",
+      "deployment.completed",
+      "deployment.failed",
+      "integration.connected",
+      "integration.error",
+      "metrics.update"
+    ],
+    "authentication": "jwt",
+    "cors": {
+      "enabled": true,
+      "origins": ["*"],
+      "credentials": true
+    }
+  },
+  "ui": {
+    "enabled": true,
+    "path": "/trigger/ui",
+    "framework": "react",
+    "entry": "/trigger/ui/index.html",
+    "components": [
+      {
+        "name": "task-dashboard",
+        "type": "panel",
+        "description": "Overview of all registered tasks with status indicators and quick actions"
+      },
+      {
+        "name": "run-viewer",
+        "type": "panel",
+        "description": "Real-time run execution viewer with logs, timeline, and output inspection"
+      },
+      {
+        "name": "schedule-manager",
+        "type": "tab",
+        "description": "Visual cron schedule editor with next-run previews and execution history"
+      },
+      {
+        "name": "workflow-designer",
+        "type": "tab",
+        "description": "Visual workflow builder for multi-step durable execution chains"
+      },
+      {
+        "name": "integration-hub",
+        "type": "tab",
+        "description": "Configure and monitor Nexus service integrations and external API connections"
+      },
+      {
+        "name": "deployment-manager",
+        "type": "tab",
+        "description": "Deploy task code, view deployment history, and manage versions"
+      },
+      {
+        "name": "waitpoint-manager",
+        "type": "tab",
+        "description": "View and resolve human-in-the-loop approval gates"
+      },
+      {
+        "name": "settings",
+        "type": "tab",
+        "description": "Plugin configuration, Trigger.dev connection settings, and API keys"
+      }
+    ]
+  },
+  "skills": {
+    "master": "trigger-dev",
+    "triggers": ["/trigger", "/trigger-dev", "/background-jobs"],
+    "subSkills": [
+      "trigger-task-create",
+      "trigger-task-run",
+      "trigger-task-list",
+      "trigger-schedule-create",
+      "trigger-schedule-list",
+      "trigger-workflow-create",
+      "trigger-workflow-run",
+      "trigger-run-status",
+      "trigger-run-cancel",
+      "trigger-run-replay",
+      "trigger-waitpoint-create",
+      "trigger-waitpoint-resolve",
+      "trigger-deploy",
+      "trigger-integration-connect",
+      "trigger-analytics",
+      "trigger-graphrag-ingest",
+      "trigger-mageagent-orchestrate",
+      "trigger-fileprocess-batch",
+      "trigger-learningagent-train",
+      "trigger-sandbox-execute",
+      "trigger-jupyter-notebook",
+      "trigger-cvat-annotate",
+      "trigger-gpu-compute"
+    ]
+  },
+  "mcp": {
+    "enabled": true,
+    "version": "1.0.0",
+    "tools": [
+      {
+        "name": "trigger_run_task",
+        "description": "Trigger a background task execution with parameters and optional callback",
+        "category": "execution"
+      },
+      {
+        "name": "trigger_create_schedule",
+        "description": "Create a cron schedule for recurring task execution",
+        "category": "scheduling"
+      },
+      {
+        "name": "trigger_get_run_status",
+        "description": "Get the current status and output of a task run",
+        "category": "monitoring"
+      },
+      {
+        "name": "trigger_create_workflow",
+        "description": "Create a multi-step durable workflow with branching logic",
+        "category": "orchestration"
+      },
+      {
+        "name": "trigger_list_tasks",
+        "description": "List all registered tasks with their configurations and recent run history",
+        "category": "discovery"
+      },
+      {
+        "name": "trigger_resolve_waitpoint",
+        "description": "Resolve a human-in-the-loop waitpoint with approval or rejection",
+        "category": "human-in-the-loop"
+      }
+    ]
+  },
+  "dependencies": {
+    "services": [
+      {
+        "name": "nexus-auth",
+        "version": ">=1.0.0",
+        "required": true,
+        "purpose": "JWT validation, user authentication, and tenant authorization"
+      },
+      {
+        "name": "nexus-graphrag",
+        "version": ">=1.0.0",
+        "required": false,
+        "purpose": "Knowledge graph ingestion tasks and semantic search-triggered workflows"
+      },
+      {
+        "name": "nexus-mageagent",
+        "version": ">=1.0.0",
+        "required": false,
+        "purpose": "Multi-agent orchestration tasks and AI agent scheduling"
+      },
+      {
+        "name": "nexus-fileprocess",
+        "version": ">=1.0.0",
+        "required": false,
+        "purpose": "Batch file processing, document extraction, and media transcoding tasks"
+      },
+      {
+        "name": "nexus-learningagent",
+        "version": ">=1.0.0",
+        "required": false,
+        "purpose": "Training pipeline tasks and model evaluation schedules"
+      },
+      {
+        "name": "nexus-sandbox",
+        "version": ">=1.0.0",
+        "required": false,
+        "purpose": "Isolated code execution for user-defined task logic"
+      },
+      {
+        "name": "nexus-jupyter",
+        "version": ">=1.0.0",
+        "required": false,
+        "purpose": "Notebook execution tasks and data pipeline scheduling"
+      },
+      {
+        "name": "nexus-cvat",
+        "version": ">=1.0.0",
+        "required": false,
+        "purpose": "Annotation pipeline tasks and labeling workflow automation"
+      },
+      {
+        "name": "nexus-gpu-bridge",
+        "version": ">=1.0.0",
+        "required": false,
+        "purpose": "GPU-accelerated compute tasks and inference scheduling"
+      },
+      {
+        "name": "nexus-n8n",
+        "version": ">=1.0.0",
+        "required": false,
+        "purpose": "n8n workflow triggering and bidirectional webhook integration"
+      }
+    ],
+    "external": [
+      {
+        "name": "trigger.dev",
+        "required": true,
+        "purpose": "Self-hosted or cloud Trigger.dev instance for durable execution runtime",
+        "apiKeyEnv": "TRIGGER_SECRET_KEY"
+      }
+    ]
+  },
+  "resources": {
+    "requests": {
+      "cpu": "500m",
+      "memory": "1Gi"
+    },
+    "limits": {
+      "cpu": "2000m",
+      "memory": "4Gi"
+    }
+  },
+  "volumes": [
+    {
+      "name": "data",
+      "mountPath": "/data",
+      "size": "10Gi",
+      "persistent": true
+    }
+  ],
+  "environment": {
+    "required": [
+      "TRIGGER_SECRET_KEY",
+      "TRIGGER_PAT",
+      "NEXUS_API_KEY"
+    ],
+    "optional": [
+      "TRIGGER_API_URL",
+      "TRIGGER_PROJECT_ID",
+      "NEXUS_AUTH_URL",
+      "NEXUS_GRAPHRAG_URL",
+      "NEXUS_MAGEAGENT_URL",
+      "NEXUS_FILEPROCESS_URL",
+      "NEXUS_LEARNINGAGENT_URL",
+      "NEXUS_SANDBOX_URL",
+      "NEXUS_JUPYTER_URL",
+      "NEXUS_CVAT_URL",
+      "NEXUS_GPU_BRIDGE_URL",
+      "NEXUS_N8N_URL",
+      "POSTGRES_HOST",
+      "POSTGRES_PORT",
+      "POSTGRES_DATABASE",
+      "POSTGRES_USER",
+      "POSTGRES_PASSWORD",
+      "REDIS_URL",
+      "LOG_LEVEL"
+    ]
+  },
+  "security": {
+    "runAsNonRoot": true,
+    "readOnlyRootFilesystem": false,
+    "allowPrivilegeEscalation": false,
+    "capabilities": {
+      "drop": ["ALL"]
+    }
+  },
+  "metrics": {
+    "enabled": true,
+    "path": "/trigger/metrics",
+    "port": 8080
+  },
+  "logging": {
+    "level": "info",
+    "format": "json",
+    "outputs": ["stdout"]
+  },
+  "pricing": {
+    "model": "freemium",
+    "currency": "USD",
+    "overageRate": 0.000020,
+    "overageUnit": "per invocation beyond tier limit",
+    "annualDiscount": 20,
+    "tiers": [
+      {
+        "name": "Free",
+        "displayName": "Free",
+        "price": 0,
+        "period": "month",
+        "limits": {
+          "invocationsPerMonth": 500,
+          "concurrentRuns": 2,
+          "schedules": 5,
+          "retentionDays": 7
+        },
+        "features": [
+          "500 task invocations/month",
+          "2 concurrent runs",
+          "5 cron schedules",
+          "7-day log retention",
+          "Basic dashboard",
+          "All Nexus service integrations",
+          "Community Discord support"
+        ]
+      },
+      {
+        "name": "Pro",
+        "displayName": "Pro",
+        "price": 1900,
+        "period": "month",
+        "popular": true,
+        "limits": {
+          "invocationsPerMonth": 50000,
+          "concurrentRuns": 20,
+          "schedules": 50,
+          "retentionDays": 30
+        },
+        "features": [
+          "50,000 task invocations/month",
+          "20 concurrent runs",
+          "50 cron schedules",
+          "30-day log retention",
+          "Advanced monitoring dashboard",
+          "WebSocket real-time streaming",
+          "Pre-built workflow templates",
+          "Email support (24h response)"
+        ]
+      },
+      {
+        "name": "Business",
+        "displayName": "Business",
+        "price": 4900,
+        "period": "month",
+        "limits": {
+          "invocationsPerMonth": 500000,
+          "concurrentRuns": 100,
+          "schedules": 200,
+          "retentionDays": 90,
+          "teamSeats": 10
+        },
+        "features": [
+          "500,000 task invocations/month",
+          "100 concurrent runs",
+          "200 cron schedules",
+          "90-day log retention",
+          "10 team seats (additional $10/seat)",
+          "Slack integration + alerts",
+          "Priority support (4h response)",
+          "Custom task definitions",
+          "SLA: 99.5% uptime"
+        ]
+      },
+      {
+        "name": "Enterprise",
+        "displayName": "Enterprise",
+        "price": -1,
+        "period": "month",
+        "contact": "sales@adverant.ai",
+        "limits": {
+          "invocationsPerMonth": -1,
+          "concurrentRuns": -1,
+          "schedules": -1,
+          "retentionDays": 365,
+          "teamSeats": -1
+        },
+        "features": [
+          "Unlimited task invocations",
+          "Unlimited concurrent runs",
+          "Unlimited cron schedules",
+          "365-day log retention",
+          "Unlimited team seats",
+          "Dedicated support engineer",
+          "Custom integrations",
+          "SLA: 99.95% uptime",
+          "RBAC, audit trails, SSO"
+        ]
+      }
+    ]
+  },
+  "marketplace": {
+    "category": "automation",
+    "subcategory": "orchestration",
+    "featured": true,
+    "tags": [
+      "durable-execution",
+      "background-jobs",
+      "task-scheduling",
+      "cron",
+      "workflow-automation",
+      "ai-orchestration",
+      "human-in-the-loop",
+      "retry-logic",
+      "event-driven"
+    ],
+    "screenshots": [
+      "/trigger/ui/screenshots/dashboard.png",
+      "/trigger/ui/screenshots/run-viewer.png",
+      "/trigger/ui/screenshots/workflow-designer.png",
+      "/trigger/ui/screenshots/schedule-manager.png"
+    ]
+  },
+  "build": {
+    "docker": {
+      "file": "nexus-plugin/Dockerfile",
+      "context": "nexus-plugin",
+      "buildArgs": {
+        "BUILD_ID": "${BUILD_ID}",
+        "BUILD_TIMESTAMP": "${BUILD_TIMESTAMP}",
+        "GIT_COMMIT": "${GIT_COMMIT}",
+        "GIT_BRANCH": "${GIT_BRANCH}",
+        "VERSION": "${VERSION}"
+      },
+      "labels": {
+        "org.opencontainers.image.title": "Nexus Trigger.dev Plugin",
+        "org.opencontainers.image.vendor": "Adverant AI",
+        "org.opencontainers.image.licenses": "Apache-2.0"
+      }
+    },
+    "registry": {
+      "host": "ghcr.io",
+      "repository": "adverant/nexus-trigger",
+      "tags": ["latest", "${VERSION}", "${GIT_COMMIT}"]
+    }
+  },
+  "deployment": {
+    "namespace": "nexus",
+    "serviceAccount": "nexus-trigger",
+    "strategy": {
+      "type": "RollingUpdate",
+      "maxSurge": 1,
+      "maxUnavailable": 0
+    }
+  },
+  "networking": {
+    "istio": {
+      "enabled": true,
+      "gateway": "nexus-stack-gateway",
+      "virtualService": true,
+      "destinationRule": true
+    },
+    "ingress": {
+      "enabled": true,
+      "className": "istio",
+      "hosts": ["api.adverant.ai"],
+      "paths": [
+        "/trigger/ui",
+        "/trigger/api/v1",
+        "/trigger/ws",
+        "/trigger/health",
+        "/trigger/ready",
+        "/trigger/live",
+        "/trigger/metrics"
+      ]
+    }
+  },
+  "testing": {
+    "unit": "npm run test",
+    "integration": "npm run test:integration",
+    "coverage": {
+      "minimum": 80,
+      "reportFormats": ["text", "lcov"]
+    }
+  },
+  "ci": {
+    "pipeline": ".github/workflows/nexus-plugin-ci.yml",
+    "stages": ["lint", "typecheck", "test", "build"],
+    "triggers": {
+      "push": ["main"],
+      "pullRequest": ["main"]
+    }
+  }
+}

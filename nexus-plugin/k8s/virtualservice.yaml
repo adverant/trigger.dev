@@ -1,0 +1,161 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: nexus-trigger
+  namespace: nexus
+  labels:
+    app: nexus-trigger
+    app.kubernetes.io/name: nexus-trigger
+    version: v1
+spec:
+  hosts:
+    - nexus-trigger
+    - nexus-trigger.nexus.svc.cluster.local
+    - api.adverant.ai
+  gateways:
+    - istio-system/nexus-stack-gateway
+    - mesh
+  http:
+    # WebSocket route - long-lived connections for real-time run updates
+    - match:
+        - headers:
+            upgrade:
+              exact: websocket
+          uri:
+            prefix: /trigger/ws
+      route:
+        - destination:
+            host: nexus-trigger.nexus.svc.cluster.local
+            port:
+              number: 8080
+      timeout: 3600s
+      corsPolicy:
+        allowOrigins:
+          - prefix: "*"
+        allowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        allowHeaders:
+          - "*"
+        exposeHeaders:
+          - "*"
+        allowCredentials: true
+
+    # Health check routes - low timeout, no retries
+    - match:
+        - uri:
+            exact: /trigger/health
+        - uri:
+            exact: /trigger/ready
+        - uri:
+            exact: /trigger/live
+      route:
+        - destination:
+            host: nexus-trigger.nexus.svc.cluster.local
+            port:
+              number: 8080
+      timeout: 10s
+
+    # Metrics endpoint
+    - match:
+        - uri:
+            exact: /trigger/metrics
+      route:
+        - destination:
+            host: nexus-trigger.nexus.svc.cluster.local
+            port:
+              number: 8080
+      timeout: 10s
+
+    # UI static files
+    - match:
+        - uri:
+            prefix: /trigger/ui
+      route:
+        - destination:
+            host: nexus-trigger.nexus.svc.cluster.local
+            port:
+              number: 8080
+      timeout: 30s
+      retryPolicy:
+        attempts: 2
+        perTryTimeout: 10s
+        retryOn: 5xx,reset,connect-failure
+      corsPolicy:
+        allowOrigins:
+          - prefix: "*"
+        allowMethods:
+          - GET
+          - OPTIONS
+        allowHeaders:
+          - "*"
+        exposeHeaders:
+          - "*"
+
+    # API routes
+    - match:
+        - uri:
+            prefix: /trigger/api/v1
+      route:
+        - destination:
+            host: nexus-trigger.nexus.svc.cluster.local
+            port:
+              number: 8080
+      timeout: 120s
+      retryPolicy:
+        attempts: 3
+        perTryTimeout: 40s
+        retryOn: 5xx,reset,connect-failure,refused-stream
+      corsPolicy:
+        allowOrigins:
+          - prefix: "*"
+        allowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - PATCH
+          - OPTIONS
+        allowHeaders:
+          - "*"
+        exposeHeaders:
+          - "*"
+        allowCredentials: true
+
+    # Catch-all for /trigger/ prefix
+    - match:
+        - uri:
+            prefix: /trigger/
+      route:
+        - destination:
+            host: nexus-trigger.nexus.svc.cluster.local
+            port:
+              number: 8080
+      timeout: 60s
+      retryPolicy:
+        attempts: 3
+        perTryTimeout: 20s
+        retryOn: 5xx,reset,connect-failure,refused-stream
+      corsPolicy:
+        allowOrigins:
+          - prefix: "*"
+        allowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        allowHeaders:
+          - "*"
+        exposeHeaders:
+          - "*"
+        allowCredentials: true
+
+    # Default route (internal mesh traffic)
+    - route:
+        - destination:
+            host: nexus-trigger.nexus.svc.cluster.local
+            port:
+              number: 8080
+      timeout: 60s

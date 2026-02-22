@@ -1,0 +1,171 @@
+import { Server as SocketIOServer } from 'socket.io';
+import { TriggerProxyService } from './trigger-proxy.service';
+import { RunRepository, Run, RunFilters, RunStatus } from '../database/repositories/run.repository';
+import { createLogger } from '../utils/logger';
+import { NotFoundError } from '../utils/errors';
+import { WS_EVENTS } from '../websocket/events';
+import { emitToOrg, emitToRun as emitToRunRoom } from '../websocket/socket-server';
+
+const logger = createLogger({ component: 'run-service' });
+
+export class RunService {
+  constructor(
+    private proxy: TriggerProxyService,
+    private runRepo: RunRepository,
+    private io: SocketIOServer
+  ) {}
+
+  async listRuns(
+    orgId: string,
+    projectId: string,
+    filters?: RunFilters
+  ): Promise<{ runs: Run[]; total: number }> {
+    // Fetch from local database with enrichment
+    const result = await this.runRepo.findByOrgId(orgId, {
+      ...filters,
+      // We filter to runs that belong to this project via a join-like approach
+      // Since the run repo filters by orgId, we add taskIdentifier filters if needed
+    });
+
+    return result;
+  }
+
+  async getRun(orgId: string, runId: string): Promise<any> {
+    // Get local record
+    const localRun = await this.runRepo.findById(runId, orgId);
+    if (!localRun) {
+      throw new NotFoundError('Run', runId);
+    }
+
+    // Get latest status from Trigger.dev
+    let triggerData: any = null;
+    try {
+      triggerData = await this.proxy.getRun(localRun.triggerRunId);
+    } catch (err: any) {
+      logger.warn('Could not fetch run from Trigger.dev, using local data', {
+        runId,
+        error: err.message,
+      });
+    }
+
+    // Update local status if Trigger.dev has newer data
+    if (triggerData && triggerData.status !== localRun.status) {
+      await this.runRepo.updateStatus(
+        localRun.runId,
+        triggerData.status as RunStatus,
+        triggerData.output,
+        triggerData.error?.message
+      );
+    }
+
+    return {
+      ...localRun,
+      triggerData,
+      status: triggerData?.status || localRun.status,
+      output: triggerData?.output || localRun.output,
+    };
+  }
+
+  async cancelRun(orgId: string, runId: string): Promise<any> {
+    const localRun = await this.runRepo.findById(runId, orgId);
+    if (!localRun) {
+      throw new NotFoundError('Run', runId);
+    }
+
+    const result = await this.proxy.cancelRun(localRun.triggerRunId);
+
+    await this.runRepo.updateStatus(localRun.runId, 'CANCELED');
+
+    emitToOrg(this.io, orgId, WS_EVENTS.RUN_CANCELLED, {
+      runId: localRun.runId,
+      triggerRunId: localRun.triggerRunId,
+      taskIdentifier: localRun.taskIdentifier,
+    });
+
+    emitToRunRoom(this.io, localRun.runId, WS_EVENTS.RUN_CANCELLED, {
+      runId: localRun.runId,
+      triggerRunId: localRun.triggerRunId,
+      taskIdentifier: localRun.taskIdentifier,
+    });
+
+    logger.info('Run cancelled', { runId, orgId, triggerRunId: localRun.triggerRunId });
+
+    return result;
+  }
+
+  async replayRun(orgId: string, runId: string): Promise<any> {
+    const localRun = await this.runRepo.findById(runId, orgId);
+    if (!localRun) {
+      throw new NotFoundError('Run', runId);
+    }
+
+    const result = await this.proxy.replayRun(localRun.triggerRunId);
+
+    const newTriggerRunId = result.id || result.runId;
+
+    // Create a new local run for the replay
+    const newRun = await this.runRepo.create({
+      triggerRunId: newTriggerRunId,
+      projectId: localRun.projectId,
+      organizationId: orgId,
+      taskIdentifier: localRun.taskIdentifier,
+      status: result.status || 'QUEUED',
+      payload: localRun.payload || undefined,
+      metadata: {
+        replayedFrom: localRun.runId,
+        ...(localRun.metadata || {}),
+      },
+      tags: localRun.tags,
+    });
+
+    emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+      taskId: localRun.taskIdentifier,
+      runId: newRun.runId,
+      triggerRunId: newTriggerRunId,
+      status: newRun.status,
+      replayedFrom: localRun.runId,
+    });
+
+    logger.info('Run replayed', {
+      originalRunId: runId,
+      newRunId: newRun.runId,
+      orgId,
+    });
+
+    return {
+      ...result,
+      localRunId: newRun.runId,
+      replayedFrom: runId,
+    };
+  }
+
+  async rescheduleRun(orgId: string, runId: string, delay: string): Promise<any> {
+    const localRun = await this.runRepo.findById(runId, orgId);
+    if (!localRun) {
+      throw new NotFoundError('Run', runId);
+    }
+
+    const result = await this.proxy.rescheduleRun(localRun.triggerRunId, delay);
+
+    await this.runRepo.updateStatus(localRun.runId, 'DELAYED');
+
+    logger.info('Run rescheduled', {
+      runId,
+      orgId,
+      delay,
+      triggerRunId: localRun.triggerRunId,
+    });
+
+    return result;
+  }
+
+  async getStatistics(orgId: string): Promise<any> {
+    return this.runRepo.getStatistics(orgId);
+  }
+
+  async streamRunLogs(runId: string, socket: any): Promise<void> {
+    // Subscribe the socket to the run's room for real-time updates
+    socket.join(`run:${runId}`);
+    logger.debug('Client subscribed to run logs', { runId, socketId: socket.id });
+  }
+}

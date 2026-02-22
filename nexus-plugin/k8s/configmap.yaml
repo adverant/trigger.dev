@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexus-trigger-config
+  namespace: nexus
+  labels:
+    app: nexus-trigger
+    app.kubernetes.io/name: nexus-trigger
+    app.kubernetes.io/component: config
+data:
+  # Application
+  LOG_LEVEL: "info"
+
+  # Trigger.dev connection
+  TRIGGER_API_URL: "http://trigger-dev-webapp.nexus.svc.cluster.local:3030"
+  TRIGGER_PROJECT_ID: "proj_nexus"
+
+  # Nexus service URLs
+  NEXUS_AUTH_URL: "http://nexus-auth.nexus.svc.cluster.local:8080"
+  NEXUS_GRAPHRAG_URL: "http://nexus-graphrag-enhanced.nexus.svc.cluster.local:9051"
+  NEXUS_MAGEAGENT_URL: "http://mageagent.nexus.svc.cluster.local:8080"
+  NEXUS_FILEPROCESS_URL: "http://nexus-fileprocess.nexus.svc.cluster.local:8080"
+  NEXUS_LEARNINGAGENT_URL: "http://nexus-learningagent.nexus.svc.cluster.local:8080"
+  NEXUS_SANDBOX_URL: "http://nexus-sandbox.nexus.svc.cluster.local:8080"
+  NEXUS_JUPYTER_URL: "http://nexus-jupyter.nexus.svc.cluster.local:8888"
+  NEXUS_CVAT_URL: "http://nexus-cvat.nexus.svc.cluster.local:8080"
+  NEXUS_GPU_BRIDGE_URL: "http://nexus-gpu-bridge.nexus.svc.cluster.local:8080"
+  NEXUS_N8N_URL: "http://n8n-main.n8n.svc.cluster.local:5678"
+
+  # Database
+  POSTGRES_HOST: "nexus-postgres"
+  POSTGRES_PORT: "5432"
+  REDIS_URL: "redis://nexus-redis:6379/3"

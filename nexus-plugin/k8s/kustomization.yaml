@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: nexus
+
+commonLabels:
+  app.kubernetes.io/name: nexus-trigger
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/part-of: nexus-stack
+  adverant.ai/plugin-type: trigger-dev
+
+commonAnnotations:
+  adverant.ai/plugin-version: "1.0.0"
+  adverant.ai/documentation: "https://docs.adverant.ai/plugins/trigger-dev"
+
+resources:
+  # 1. Service Account
+  - serviceaccount.yaml
+
+  # 2. Configuration
+  - configmap.yaml
+  # secrets.yaml is NOT included - must be applied separately
+  # kubectl apply -f secrets.yaml
+
+  # 3. Deployment + Service + HPA
+  - deployment.yaml
+
+  # 4. Istio networking
+  - virtualservice.yaml
+  - destinationrule.yaml
+
+  # 5. Network security
+  - networkpolicy.yaml
+
+images:
+  - name: ghcr.io/adverant/nexus-trigger
+    newTag: latest
+
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    app.kubernetes.io/part-of: nexus-trigger-plugin
