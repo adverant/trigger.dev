@@ -264,7 +264,7 @@ export default function WaitpointsPage() {
                         Task: <code className="text-slate-400">{wp.taskId}</code>
                       </span>
                       <button
-                        onClick={() => router.push(`/trigger/ui/runs/${wp.runId}`)}
+                        onClick={() => router.push(`/runs/${wp.runId}`)}
                         className="flex items-center gap-1 text-accent hover:text-accent-hover transition-colors"
                       >
                         Run: {wp.runId.slice(0, 12)}...

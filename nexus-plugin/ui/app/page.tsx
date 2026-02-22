@@ -198,7 +198,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold text-slate-200">Recent Runs</h2>
             <button
-              onClick={() => router.push('/trigger/ui/runs')}
+              onClick={() => router.push('/runs')}
               className="text-xs text-accent hover:text-accent-hover flex items-center gap-1 transition-colors"
             >
               View all <ArrowRight className="h-3 w-3" />
@@ -227,7 +227,7 @@ export default function DashboardPage() {
                     <tr
                       key={run.id}
                       className="border-b border-border/50 hover:bg-surface-overlay/50 cursor-pointer transition-colors"
-                      onClick={() => router.push(`/trigger/ui/runs/${run.id}`)}
+                      onClick={() => router.push(`/runs/${run.id}`)}
                     >
                       <td className="px-3 py-2.5 font-mono text-xs text-slate-300">
                         {run.id.slice(0, 12)}...
@@ -255,7 +255,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold text-slate-200">Integrations</h2>
             <button
-              onClick={() => router.push('/trigger/ui/integrations')}
+              onClick={() => router.push('/integrations')}
               className="text-xs text-accent hover:text-accent-hover flex items-center gap-1 transition-colors"
             >
               Manage <ArrowRight className="h-3 w-3" />

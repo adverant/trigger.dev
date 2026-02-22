@@ -134,7 +134,7 @@ export default function RunDetailPage() {
     setReplaying(true);
     try {
       const response = await replayRun(runId);
-      router.push(`/trigger/ui/runs/${response.data.id}`);
+      router.push(`/runs/${response.data.id}`);
     } catch (err) {
       setError((err as Error).message || 'Failed to replay run');
     } finally {
@@ -167,7 +167,7 @@ export default function RunDetailPage() {
         <AlertTriangle className="h-12 w-12 text-red-400 mb-4" />
         <h2 className="text-lg font-semibold text-slate-200 mb-2">Run Not Found</h2>
         <p className="text-sm text-slate-400 mb-6">{error}</p>
-        <button onClick={() => router.push('/trigger/ui/runs')} className="btn-secondary">
+        <button onClick={() => router.push('/runs')} className="btn-secondary">
           Back to Runs
         </button>
       </div>
@@ -178,7 +178,7 @@ export default function RunDetailPage() {
     <div className="space-y-6">
       {/* Back navigation */}
       <button
-        onClick={() => router.push('/trigger/ui/runs')}
+        onClick={() => router.push('/runs')}
         className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-slate-200 transition-colors"
       >
         <ArrowLeft className="h-4 w-4" />

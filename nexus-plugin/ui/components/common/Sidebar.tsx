@@ -36,18 +36,15 @@ const navItems: NavItem[] = [
   { label: 'Settings', href: '/settings', icon: Settings },
 ];
 
-const basePath = '/trigger/ui';
-
 export default function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
 
   const isActive = (href: string) => {
-    const fullHref = `${basePath}${href}`;
     if (href === '/') {
-      return pathname === basePath || pathname === `${basePath}/`;
+      return pathname === '/' || pathname === '';
     }
-    return pathname.startsWith(fullHref);
+    return pathname.startsWith(href);
   };
 
   return (
@@ -77,7 +74,7 @@ export default function Sidebar() {
           return (
             <Link
               key={item.href}
-              href={`${basePath}${item.href}`}
+              href={item.href}
               className={clsx(
                 'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors group',
                 active

@@ -54,7 +54,7 @@ export default function TasksPage() {
     setTriggeringId(taskId);
     try {
       const response = await apiClient.post<{ id: string }>(`/tasks/${taskId}/trigger`, { payload: {} });
-      router.push(`/trigger/ui/runs/${response.data.id}`);
+      router.push(`/runs/${response.data.id}`);
     } catch (err) {
       setError((err as Error).message || 'Failed to trigger task');
     } finally {
@@ -183,7 +183,7 @@ export default function TasksPage() {
         columns={columns as Column<Task & Record<string, unknown>>[]}
         data={tasks as (Task & Record<string, unknown>)[]}
         loading={loading}
-        onRowClick={(row) => router.push(`/trigger/ui/tasks/${row.id}`)}
+        onRowClick={(row) => router.push(`/tasks/${row.id}`)}
         emptyMessage="No tasks found. Click Sync Tasks to discover registered tasks."
         pageSize={25}
       />

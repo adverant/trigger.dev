@@ -229,7 +229,7 @@ export default function RunsPage() {
         totalItems={totalItems}
         onPageChange={setPage}
         serverPagination
-        onRowClick={(row) => router.push(`/trigger/ui/runs/${row.id as string}`)}
+        onRowClick={(row) => router.push(`/runs/${row.id as string}`)}
         emptyMessage="No runs match the current filters"
       />
     </div>

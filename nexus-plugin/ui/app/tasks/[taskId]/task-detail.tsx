@@ -57,7 +57,7 @@ export default function TaskDetailPage() {
     try {
       const parsed = JSON.parse(payload);
       const response = await triggerTask(taskId, parsed);
-      router.push(`/trigger/ui/runs/${response.data.id}`);
+      router.push(`/runs/${response.data.id}`);
     } catch (err) {
       if (err instanceof SyntaxError) {
         setTriggerError('Invalid JSON payload');
@@ -85,7 +85,7 @@ export default function TaskDetailPage() {
         <AlertTriangle className="h-12 w-12 text-red-400 mb-4" />
         <h2 className="text-lg font-semibold text-slate-200 mb-2">Task Not Found</h2>
         <p className="text-sm text-slate-400 mb-6">{error || 'Task could not be loaded'}</p>
-        <button onClick={() => router.push('/trigger/ui/tasks')} className="btn-secondary">
+        <button onClick={() => router.push('/tasks')} className="btn-secondary">
           Back to Tasks
         </button>
       </div>
@@ -96,7 +96,7 @@ export default function TaskDetailPage() {
     <div className="space-y-6">
       {/* Back navigation */}
       <button
-        onClick={() => router.push('/trigger/ui/tasks')}
+        onClick={() => router.push('/tasks')}
         className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-slate-200 transition-colors"
       >
         <ArrowLeft className="h-4 w-4" />
@@ -239,7 +239,7 @@ export default function TaskDetailPage() {
                   <tr
                     key={run.id}
                     className="border-b border-border/50 hover:bg-surface-overlay/50 cursor-pointer transition-colors"
-                    onClick={() => router.push(`/trigger/ui/runs/${run.id}`)}
+                    onClick={() => router.push(`/runs/${run.id}`)}
                   >
                     <td className="px-3 py-2.5 font-mono text-xs text-slate-300">
                       {run.id.slice(0, 12)}...
