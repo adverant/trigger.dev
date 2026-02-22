@@ -141,6 +141,10 @@ export class TaskService {
     return result;
   }
 
+  async getTaskById(orgId: string, taskDefId: string): Promise<any | null> {
+    return this.taskDefRepo.findById(taskDefId, orgId);
+  }
+
   async listTaskDefinitions(orgId: string, projectId?: string): Promise<any[]> {
     if (projectId) {
       return this.taskDefRepo.findByProject(projectId, orgId);

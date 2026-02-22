@@ -97,6 +97,15 @@ export class TaskDefinitionRepository {
     return rows.map((row) => this.mapRow(row));
   }
 
+  async findById(taskDefId: string, organizationId: string): Promise<TaskDefinition | null> {
+    const row = await this.db.queryOne<any>(
+      `SELECT * FROM trigger.task_definitions
+       WHERE task_def_id = $1 AND organization_id = $2`,
+      [taskDefId, organizationId]
+    );
+    return row ? this.mapRow(row) : null;
+  }
+
   async findByIdentifier(
     projectId: string,
     taskIdentifier: string

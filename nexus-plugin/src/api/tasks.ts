@@ -20,8 +20,16 @@ function toUITask(task: any): Record<string, any> {
     queue: task.queueName || task.queue || 'default',
     machinePreset: task.machinePreset,
     triggerSource: task.isNexusIntegration ? 'nexus' : 'trigger',
-    retry: task.retryConfig || undefined,
+    retry: task.retryConfig
+      ? {
+          maxAttempts: task.retryConfig.maxAttempts,
+          minTimeout: task.retryConfig.minTimeoutInMs ?? task.retryConfig.minTimeout,
+          maxTimeout: task.retryConfig.maxTimeoutInMs ?? task.retryConfig.maxTimeout,
+          factor: task.retryConfig.factor,
+        }
+      : undefined,
     schema: task.inputSchema || undefined,
+    description: task.description || undefined,
     nexusIntegration: task.nexusService || undefined,
     createdAt: task.createdAt ? (task.createdAt.toISOString?.() ?? String(task.createdAt)) : new Date().toISOString(),
     updatedAt: task.updatedAt ? (task.updatedAt.toISOString?.() ?? String(task.updatedAt)) : new Date().toISOString(),
@@ -116,6 +124,30 @@ export function createTaskRouter(
           synced: synced.length,
           tasks: synced,
         },
+      });
+    })
+  );
+
+  // GET /:taskId - Get a single task definition
+  router.get(
+    '/:taskId',
+    asyncHandler(async (req: Request, res: Response) => {
+      const task = await taskService.getTaskById(
+        req.user!.organizationId,
+        req.params.taskId
+      );
+
+      if (!task) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Task not found' },
+        });
+        return;
+      }
+
+      res.json({
+        success: true,
+        data: toUITask(task),
       });
     })
   );
