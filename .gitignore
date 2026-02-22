@@ -68,3 +68,15 @@ apps/**/public/build
 .mcp.log
 .mcp.json
 .cursor/debug.log
+
+# nexus-plugin
+nexus-plugin/dist/
+nexus-plugin/node_modules/
+nexus-plugin/ui/node_modules/
+nexus-plugin/ui/.next/
+nexus-plugin/ui/out/
+nexus-plugin/k8s/secrets.yaml
+nexus-plugin/.env
+nexus-plugin/.env.*
+!nexus-plugin/.env.example
+!nexus-plugin/k8s/secrets.yaml.example

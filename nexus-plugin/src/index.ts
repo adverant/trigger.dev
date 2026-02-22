@@ -13,9 +13,9 @@ import { loadConfig } from './config';
 import { DatabaseService } from './database/database.service';
 import { initializeRedis } from './database/redis.service';
 import { NexusAuthClient } from './auth/nexus-auth-client';
-import { setupSocketServer, getSocketStats } from './websocket/socket-server';
+import { setupSocketServer } from './websocket/socket-server';
 import { RunStreamManager } from './websocket/run-stream';
-import { createRateLimiter } from './middleware/rate-limiter';
+import { createRateLimiter, rateLimiter } from './middleware/rate-limiter';
 import { requireAuth } from './middleware/auth';
 import { errorHandler, notFoundHandler } from './middleware/error-handler';
 import { requestLogger } from './middleware/request-logger';
@@ -25,16 +25,16 @@ import { HealthChecker } from './utils/health-checker';
 import { createLogger } from './utils/logger';
 import { register as metricsRegistry, httpRequestDuration, httpRequestTotal } from './utils/metrics';
 
-// Import route factories
-import { createProjectRoutes } from './api/projects';
-import { createTaskRoutes } from './api/tasks';
-import { createRunRoutes } from './api/runs';
-import { createScheduleRoutes } from './api/schedules';
-import { createWaitpointRoutes } from './api/waitpoints';
-import { createEnvironmentRoutes } from './api/environments';
-import { createDeploymentRoutes } from './api/deployments';
-import { createQueueRoutes } from './api/queues';
-import { createIntegrationRoutes } from './api/integrations';
+// Import route factories (actual export names are *Router, not *Routes)
+import { createProjectRouter } from './api/projects';
+import { createTaskRouter } from './api/tasks';
+import { createRunRouter } from './api/runs';
+import { createScheduleRouter } from './api/schedules';
+import { createWaitpointRouter } from './api/waitpoints';
+import { createEnvironmentRouter } from './api/environments';
+import { createDeploymentRouter } from './api/deployments';
+import { createQueueRouter } from './api/queues';
+import { createIntegrationRouter } from './api/integrations';
 
 // Import services
 import { TriggerProxyService } from './services/trigger-proxy.service';
@@ -55,6 +55,10 @@ import { WaitpointRepository } from './database/repositories/waitpoint.repositor
 import { IntegrationConfigRepository } from './database/repositories/integration-config.repository';
 import { WebhookRepository } from './database/repositories/webhook.repository';
 import { UsageRepository } from './database/repositories/usage.repository';
+import { TaskDefinitionRepository } from './database/repositories/task-definition.repository';
+
+// Import Trigger.dev client factory
+import { createTriggerClients } from './config/trigger-client';
 
 // Import integration clients
 import { GraphRAGClient } from './integrations/graphrag.client';
@@ -90,18 +94,8 @@ class NexusTriggerServer {
       maxHttpBufferSize: 1e6, // 1MB
     });
 
-    // Initialize database
-    this.db = new DatabaseService({
-      host: this.config.database.host,
-      port: this.config.database.port,
-      database: this.config.database.database,
-      user: this.config.database.user,
-      password: this.config.database.password,
-      ssl: this.config.database.ssl,
-      max: this.config.database.maxConnections,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
-    });
+    // Initialize database (pass DatabaseConfig directly)
+    this.db = new DatabaseService(this.config.database);
 
     // Initialize Redis
     this.redis = initializeRedis(this.config.redis.url);
@@ -109,15 +103,12 @@ class NexusTriggerServer {
     // Initialize auth client
     this.authClient = new NexusAuthClient(
       this.config.nexus.authUrl,
-      this.redis
+      this.config.nexus.apiKey
     );
+    this.authClient.setRedis(this.redis);
 
-    // Initialize health checker
-    this.healthChecker = new HealthChecker(
-      this.db,
-      this.redis,
-      this.config.trigger.apiUrl
-    );
+    // Initialize health checker (takes version string only)
+    this.healthChecker = new HealthChecker(this.config.plugin.version);
 
     // Initialize run stream manager
     this.runStreamManager = new RunStreamManager(this.io, {
@@ -126,7 +117,7 @@ class NexusTriggerServer {
       pollIntervalMs: 3000,
     });
 
-    // Initialize sync service (placeholder - will be fully wired in services)
+    // Initialize sync service (placeholder - will be fully wired in start())
     this.syncService = null as any;
   }
 
@@ -148,34 +139,35 @@ class NexusTriggerServer {
       const integrationConfigRepo = new IntegrationConfigRepository(this.db);
       const webhookRepo = new WebhookRepository(this.db);
       const usageRepo = new UsageRepository(this.db);
+      const taskDefRepo = new TaskDefinitionRepository(this.db);
+
+      // Initialize Trigger.dev SDK and Management API client
+      const triggerClients = createTriggerClients(this.config.trigger);
 
       // Initialize Trigger.dev proxy service
-      const triggerProxy = new TriggerProxyService(this.config.trigger);
+      const triggerProxy = new TriggerProxyService(triggerClients.managementApi);
 
       // Initialize integration clients
-      const graphragClient = new GraphRAGClient();
+      const graphragClient = new GraphRAGClient('system');
 
-      // Initialize services
-      const projectService = new ProjectService(projectRepo, triggerProxy);
+      // Initialize services (match actual constructor signatures)
+      const projectService = new ProjectService(projectRepo, usageRepo);
       const taskService = new TaskService(
-        this.db,
         triggerProxy,
+        projectRepo,
         runRepo,
-        graphragClient,
-        this.runStreamManager,
-        this.io
+        taskDefRepo,
+        usageRepo,
+        this.config.nexus,
+        this.io,
+        this.runStreamManager
       );
-      const runService = new RunService(runRepo, triggerProxy, this.io);
-      const scheduleService = new ScheduleService(scheduleRepo, triggerProxy, this.io);
-      const waitpointService = new WaitpointService(waitpointRepo, triggerProxy, this.io);
-      const deploymentService = new DeploymentService(triggerProxy);
+      const runService = new RunService(triggerProxy, runRepo, this.io);
+      const scheduleService = new ScheduleService(triggerProxy, scheduleRepo, usageRepo, this.io);
+      const waitpointService = new WaitpointService(triggerProxy, waitpointRepo, usageRepo, this.io);
+      const deploymentService = new DeploymentService(triggerProxy, this.db);
       const queueService = new QueueService(triggerProxy, this.io);
-      this.syncService = new SyncService(
-        runRepo,
-        scheduleRepo,
-        triggerProxy,
-        this.db
-      );
+      this.syncService = new SyncService(triggerProxy, runRepo, scheduleRepo);
 
       // Setup middleware
       this.setupMiddleware();
@@ -188,6 +180,7 @@ class NexusTriggerServer {
 
       // Setup API routes (auth required)
       this.setupApiRoutes(
+        triggerProxy,
         projectService,
         taskService,
         runService,
@@ -284,6 +277,33 @@ class NexusTriggerServer {
   }
 
   private setupHealthEndpoints(): void {
+    // Root health endpoint (K8s plugin-runner expects /health)
+    this.app.get('/health', async (_req, res) => {
+      try {
+        const health = await this.healthChecker.performHealthCheck({
+          pool: this.db.getPool(),
+          redis: this.redis,
+          triggerApiUrl: this.config.trigger.apiUrl,
+        });
+        const statusCode = health.status === 'healthy' ? 200 : health.status === 'degraded' ? 200 : 503;
+        res.status(statusCode).json(health);
+      } catch (err: any) {
+        res.status(503).json({ status: 'unhealthy', error: err.message });
+      }
+    });
+
+    this.app.get('/ready', async (_req, res) => {
+      try {
+        const dbHealth = await this.db.healthCheck();
+        if (!dbHealth.healthy) {
+          return res.status(503).json({ status: 'not_ready', reason: 'Database unavailable' });
+        }
+        res.json({ status: 'ready' });
+      } catch (err: any) {
+        res.status(503).json({ status: 'not_ready', reason: err.message });
+      }
+    });
+
     // Liveness probe - is the process alive?
     this.app.get('/trigger/live', (_req, res) => {
       res.json({
@@ -298,7 +318,7 @@ class NexusTriggerServer {
     this.app.get('/trigger/ready', async (_req, res) => {
       try {
         const dbHealth = await this.db.healthCheck();
-        if (dbHealth.status === 'unhealthy') {
+        if (!dbHealth.healthy) {
           return res.status(503).json({
             status: 'not_ready',
             reason: 'Database unavailable',
@@ -316,7 +336,11 @@ class NexusTriggerServer {
     // Health check - detailed system status
     this.app.get('/trigger/health', async (_req, res) => {
       try {
-        const health = await this.healthChecker.check();
+        const health = await this.healthChecker.performHealthCheck({
+          pool: this.db.getPool(),
+          redis: this.redis,
+          triggerApiUrl: this.config.trigger.apiUrl,
+        });
         const statusCode = health.status === 'healthy' ? 200 : health.status === 'degraded' ? 200 : 503;
         res.status(statusCode).json(health);
       } catch (err: any) {
@@ -341,6 +365,7 @@ class NexusTriggerServer {
   }
 
   private setupApiRoutes(
+    triggerProxy: TriggerProxyService,
     projectService: ProjectService,
     taskService: TaskService,
     runService: RunService,
@@ -353,24 +378,24 @@ class NexusTriggerServer {
     const apiRouter = express.Router();
 
     // Apply auth middleware to all API routes
-    const rateLimiter = createRateLimiter(this.redis);
+    const limiters = createRateLimiter(this.redis);
     const quotaEnforcer = new QuotaEnforcer(this.redis);
-    const usageTrackerMiddleware = usageTracker(this.db);
+    const usageTrackerMiddleware = usageTracker(this.db.getPool());
 
     apiRouter.use(requireAuth(this.authClient));
-    apiRouter.use(rateLimiter);
+    apiRouter.use(rateLimiter(limiters));
     apiRouter.use(usageTrackerMiddleware);
 
-    // Mount route modules
-    apiRouter.use('/projects', createProjectRoutes(projectService));
-    apiRouter.use('/tasks', createTaskRoutes(taskService, this.io));
-    apiRouter.use('/runs', createRunRoutes(runService));
-    apiRouter.use('/schedules', createScheduleRoutes(scheduleService));
-    apiRouter.use('/waitpoints', createWaitpointRoutes(waitpointService));
-    apiRouter.use('/environments', createEnvironmentRoutes(this.config.trigger));
-    apiRouter.use('/deployments', createDeploymentRoutes(deploymentService));
-    apiRouter.use('/queues', createQueueRoutes(queueService));
-    apiRouter.use('/integrations', createIntegrationRoutes(integrationConfigRepo, this.config));
+    // Mount route modules (match actual function signatures)
+    apiRouter.use('/projects', createProjectRouter(projectService, this.io));
+    apiRouter.use('/tasks', createTaskRouter(taskService, this.io));
+    apiRouter.use('/runs', createRunRouter(runService, this.io));
+    apiRouter.use('/schedules', createScheduleRouter(scheduleService, this.io));
+    apiRouter.use('/waitpoints', createWaitpointRouter(waitpointService, this.io));
+    apiRouter.use('/environments', createEnvironmentRouter(triggerProxy));
+    apiRouter.use('/deployments', createDeploymentRouter(deploymentService));
+    apiRouter.use('/queues', createQueueRouter(queueService, this.io));
+    apiRouter.use('/integrations', createIntegrationRouter(integrationConfigRepo, this.config.nexus, this.io));
 
     this.app.use('/trigger/api/v1', apiRouter);
 
@@ -379,6 +404,9 @@ class NexusTriggerServer {
 
   private setupUI(): void {
     const uiBuildPath = path.resolve(this.config.plugin.uiBuildPath || './ui/out');
+
+    // Root redirect for proxy access
+    this.app.get('/', (_req, res) => res.redirect('/trigger/ui'));
 
     // Serve Next.js static export
     this.app.use('/trigger/ui', express.static(uiBuildPath));

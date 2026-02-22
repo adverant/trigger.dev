@@ -113,29 +113,31 @@ export function loadConfig(): AppConfig {
     environment: optionalEnv('TRIGGER_ENVIRONMENT', 'dev') as TriggerEnvironment,
   };
 
+  // Support both plugin-runner configmap names (AUTH_API_URL) and our names (NEXUS_AUTH_URL)
   const nexus: NexusConfig = {
-    authUrl: optionalEnv('NEXUS_AUTH_URL', 'http://nexus-auth.nexus.svc.cluster.local:9100'),
+    authUrl: optionalEnv('AUTH_API_URL', optionalEnv('NEXUS_AUTH_URL', 'http://nexus-auth.nexus.svc.cluster.local:9100')),
     apiKey: optionalEnv('NEXUS_API_KEY', ''),
     services: {
-      graphrag: optionalEnv('GRAPHRAG_URL', 'http://nexus-graphrag-enhanced:9051'),
-      mageagent: optionalEnv('MAGEAGENT_URL', 'http://nexus-mageagent:8080'),
-      fileprocess: optionalEnv('FILEPROCESS_URL', 'http://nexus-fileprocess:9040'),
-      learningagent: optionalEnv('LEARNINGAGENT_URL', 'http://nexus-learningagent:8094'),
-      geoagent: optionalEnv('GEOAGENT_URL', 'http://nexus-mageagent:8080'),
-      jupyter: optionalEnv('JUPYTER_URL', 'http://nexus-jupyter-auth-proxy:8888'),
-      cvat: optionalEnv('CVAT_URL', 'http://nexus-cvat-auth-proxy:8080'),
-      gpuBridge: optionalEnv('GPU_BRIDGE_URL', 'http://nexus-gpu-bridge:8090'),
-      sandbox: optionalEnv('SANDBOX_URL', 'http://nexus-sandbox:9080'),
-      n8n: optionalEnv('N8N_URL', 'http://nexus-n8n:5678'),
+      graphrag: optionalEnv('GRAPHRAG_API_URL', optionalEnv('GRAPHRAG_URL', 'http://nexus-graphrag-api.nexus.svc.cluster.local:9000')),
+      mageagent: optionalEnv('MAGEAGENT_API_URL', optionalEnv('MAGEAGENT_URL', 'http://nexus-mageagent-api.nexus.svc.cluster.local:9010')),
+      fileprocess: optionalEnv('FILEPROCESS_URL', 'http://nexus-fileprocess.nexus.svc.cluster.local:8080'),
+      learningagent: optionalEnv('LEARNINGAGENT_URL', 'http://nexus-learningagent.nexus.svc.cluster.local:8080'),
+      geoagent: optionalEnv('GEOAGENT_URL', 'http://nexus-geoagent.nexus.svc.cluster.local:8080'),
+      jupyter: optionalEnv('JUPYTER_URL', 'http://nexus-jupyter-auth-proxy.nexus.svc.cluster.local:8888'),
+      cvat: optionalEnv('CVAT_URL', 'http://nexus-cvat-auth-proxy.nexus.svc.cluster.local:8080'),
+      gpuBridge: optionalEnv('GPU_BRIDGE_URL', 'http://nexus-gpu-bridge.nexus.svc.cluster.local:8090'),
+      sandbox: optionalEnv('SANDBOX_URL', 'http://nexus-sandbox.nexus.svc.cluster.local:9080'),
+      n8n: optionalEnv('N8N_URL', 'http://nexus-n8n.nexus.svc.cluster.local:5678'),
     },
   };
 
+  // Support both plugin-runner configmap names (DATABASE_HOST) and our names (POSTGRES_HOST)
   const database: DatabaseConfig = {
-    host: optionalEnv('POSTGRES_HOST', 'nexus-postgres.nexus.svc.cluster.local'),
-    port: intEnv('POSTGRES_PORT', 5432),
-    database: optionalEnv('POSTGRES_DATABASE', 'nexus'),
-    user: optionalEnv('POSTGRES_USER', 'nexus'),
-    password: optionalEnv('POSTGRES_PASSWORD', ''),
+    host: optionalEnv('DATABASE_HOST', optionalEnv('POSTGRES_HOST', 'nexus-postgres.nexus.svc.cluster.local')),
+    port: intEnv('DATABASE_PORT', intEnv('POSTGRES_PORT', 5432)),
+    database: optionalEnv('DATABASE_NAME', optionalEnv('POSTGRES_DB', optionalEnv('POSTGRES_DATABASE', 'nexus'))),
+    user: optionalEnv('DATABASE_USER', optionalEnv('POSTGRES_USER', 'nexus')),
+    password: optionalEnv('DATABASE_PASSWORD', optionalEnv('POSTGRES_PASSWORD', '')),
     ssl: boolEnv('POSTGRES_SSL', false),
     maxConnections: intEnv('POSTGRES_MAX_CONNECTIONS', 20),
   };

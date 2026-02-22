@@ -8,7 +8,6 @@
  * Supports both self-hosted and external Trigger.dev instances.
  */
 
-import { configure } from '@trigger.dev/sdk';
 import axios, { AxiosInstance } from 'axios';
 import { TriggerConfig } from './index';
 import { createLogger } from '../utils/logger';
@@ -20,8 +19,9 @@ export interface TriggerClients {
 }
 
 /**
- * Initialize the Trigger.dev SDK for task triggering.
- * This configures the global SDK state used by tasks.trigger() calls.
+ * Initialize the Trigger.dev SDK config.
+ * The plugin server uses the Management REST API, not the SDK task runner.
+ * SDK configure() is only needed by Trigger.dev worker processes.
  */
 export function initializeTriggerSdk(config: TriggerConfig): void {
   if (!config.secretKey) {
@@ -29,12 +29,7 @@ export function initializeTriggerSdk(config: TriggerConfig): void {
     return;
   }
 
-  configure({
-    secretKey: config.secretKey,
-    baseURL: config.apiUrl,
-  });
-
-  logger.info('Trigger.dev SDK configured', {
+  logger.info('Trigger.dev SDK config loaded (REST API mode)', {
     apiUrl: config.apiUrl,
     environment: config.environment,
     mode: config.mode,

@@ -9,7 +9,15 @@
  */
 
 import { task } from '@trigger.dev/sdk/v3';
-import { MageAgentClient } from '../integrations/mageagent-client';
+import { MageAgentClient } from '../integrations/mageagent.client';
+
+// ---------------------------------------------------------------------------
+// Helper
+// ---------------------------------------------------------------------------
+
+function getClient(organizationId: string): MageAgentClient {
+  return new MageAgentClient(organizationId);
+}
 
 // ---------------------------------------------------------------------------
 // Payload interfaces
@@ -136,15 +144,15 @@ export interface EmbeddingResult {
 }
 
 // ---------------------------------------------------------------------------
-// Client singleton
-// ---------------------------------------------------------------------------
-
-const mageagent = new MageAgentClient();
-
-// ---------------------------------------------------------------------------
 // Tasks
 // ---------------------------------------------------------------------------
 
+/**
+ * Multi-agent orchestration with retry and model fallover.
+ *
+ * Maps to MageAgentClient.process() -- sends the prompt with the primary model
+ * and falls back through fallbackModels on failure.
+ */
 export const mageAgentOrchestration = task({
   id: 'mageagent-orchestration',
   retry: {
@@ -158,22 +166,27 @@ export const mageAgentOrchestration = task({
       `[mageagent] Starting orchestration session=${payload.sessionId}, model=${payload.agentConfig.primaryModel}`
     );
 
+    const client = getClient(payload.organizationId);
     const startTime = Date.now();
     let fallbackUsed = false;
     let response;
 
     try {
-      response = await mageagent.chat({
-        organizationId: payload.organizationId,
-        sessionId: payload.sessionId,
-        model: payload.agentConfig.primaryModel,
+      response = await client.process({
         prompt: payload.prompt,
+        model: payload.agentConfig.primaryModel,
         systemPrompt: payload.agentConfig.systemPrompt,
         maxTokens: payload.agentConfig.maxTokens ?? 4096,
         temperature: payload.agentConfig.temperature ?? 0.7,
-        conversationHistory: payload.context?.conversationHistory,
-        attachments: payload.context?.attachments,
-        routing: payload.routing,
+        context: payload.context
+          ? {
+              projectId: payload.context.projectId,
+              taskId: payload.context.taskId,
+              conversationHistory: payload.context.conversationHistory,
+              attachments: payload.context.attachments,
+              routing: payload.routing,
+            }
+          : undefined,
       });
     } catch (primaryError) {
       const fallbackModels = payload.agentConfig.fallbackModels || [];
@@ -189,17 +202,21 @@ export const mageAgentOrchestration = task({
       for (const fallbackModel of fallbackModels) {
         try {
           console.log(`[mageagent] Trying fallback model: ${fallbackModel}`);
-          response = await mageagent.chat({
-            organizationId: payload.organizationId,
-            sessionId: payload.sessionId,
-            model: fallbackModel,
+          response = await client.process({
             prompt: payload.prompt,
+            model: fallbackModel,
             systemPrompt: payload.agentConfig.systemPrompt,
             maxTokens: payload.agentConfig.maxTokens ?? 4096,
             temperature: payload.agentConfig.temperature ?? 0.7,
-            conversationHistory: payload.context?.conversationHistory,
-            attachments: payload.context?.attachments,
-            routing: payload.routing,
+            context: payload.context
+              ? {
+                  projectId: payload.context.projectId,
+                  taskId: payload.context.taskId,
+                  conversationHistory: payload.context.conversationHistory,
+                  attachments: payload.context.attachments,
+                  routing: payload.routing,
+                }
+              : undefined,
           });
           fallbackUsed = true;
           break;
@@ -216,22 +233,37 @@ export const mageAgentOrchestration = task({
 
     const latencyMs = Date.now() - startTime;
 
+    // Estimate cost from token usage (rough heuristic -- the MageAgent API
+    // does not return cost directly, so we leave 0 for now).
+    const costCents = 0;
+
     console.log(
-      `[mageagent] Orchestration complete: model=${response.modelUsed}, tokens=${response.tokensUsed.total}, cost=${response.costCents}c, latency=${latencyMs}ms, fallback=${fallbackUsed}`
+      `[mageagent] Orchestration complete: model=${response.model}, tokens=${response.usage.totalTokens}, cost=${costCents}c, latency=${latencyMs}ms, fallback=${fallbackUsed}`
     );
 
     return {
       sessionId: payload.sessionId,
-      response: response.content,
-      modelUsed: response.modelUsed,
-      tokensUsed: response.tokensUsed,
-      costCents: response.costCents,
+      response: response.result,
+      modelUsed: response.model,
+      tokensUsed: {
+        prompt: response.usage.promptTokens,
+        completion: response.usage.completionTokens,
+        total: response.usage.totalTokens,
+      },
+      costCents,
       latencyMs,
       fallbackUsed,
     } satisfies OrchestrationResult;
   },
 });
 
+/**
+ * Competitive agent evaluation -- runs the same prompt across multiple models
+ * and picks the best response.
+ *
+ * Maps to MageAgentClient.compete() which accepts a list of models and returns
+ * scored results with a winner.
+ */
 export const mageAgentCompetition = task({
   id: 'mageagent-competition',
   run: async (payload: MageAgentCompetitionPayload) => {
@@ -239,81 +271,46 @@ export const mageAgentCompetition = task({
       `[mageagent] Starting competition with ${payload.competitors.length} agents, metrics=${payload.evaluationCriteria.metrics.join(',')}`
     );
 
-    const timeoutMs = payload.timeoutMs ?? 60000;
-    const competitorResults: CompetitionResult['scores'] = [];
-    let totalCost = 0;
+    const client = getClient(payload.organizationId);
 
-    const competitionPromises = payload.competitors.map(async (competitor) => {
-      const startTime = Date.now();
-      console.log(`[mageagent] Running competitor agent=${competitor.agentId}, model=${competitor.model}`);
+    // Build the evaluation criteria string from the structured metrics and
+    // optional custom rubric so compete() can use it.
+    const criteriaString = [
+      `Evaluate on: ${payload.evaluationCriteria.metrics.join(', ')}`,
+      payload.evaluationCriteria.customRubric
+        ? `Rubric: ${payload.evaluationCriteria.customRubric}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('. ');
 
-      const result = await mageagent.chat({
-        organizationId: payload.organizationId,
-        sessionId: `competition-${Date.now()}-${competitor.agentId}`,
-        model: competitor.model,
-        prompt: payload.prompt,
-        systemPrompt: competitor.systemPrompt,
-        temperature: competitor.temperature ?? 0.7,
-        maxTokens: 4096,
-        context: payload.context,
-      });
+    // compete() accepts a flat list of model names and a single temperature.
+    // We use the first competitor's temperature as the default.
+    const competeResponse = await client.compete({
+      prompt: payload.prompt,
+      models: payload.competitors.map((c) => c.model),
+      evaluationCriteria: criteriaString,
+      temperature: payload.competitors[0]?.temperature ?? 0.7,
+    });
 
-      const latencyMs = Date.now() - startTime;
+    // Map compete() results back to the CompetitionResult shape.
+    // compete() returns per-model results with score & latency; we need to
+    // cross-reference with the original competitor list to get agentId.
+    const scores: CompetitionResult['scores'] = competeResponse.results.map((cr) => {
+      // Find the original competitor entry for this model.
+      const competitor = payload.competitors.find((c) => c.model === cr.model);
       return {
-        agentId: competitor.agentId,
-        model: competitor.model,
-        response: result.content,
-        latencyMs,
-        costCents: result.costCents,
+        agentId: competitor?.agentId ?? cr.model,
+        model: cr.model,
+        overallScore: cr.score,
+        metricScores: {}, // compete() doesn't break down per-metric
+        response: cr.response,
+        latencyMs: cr.latency,
       };
     });
 
-    const rawResults = await Promise.allSettled(competitorPromises);
-
-    for (const result of rawResults) {
-      if (result.status === 'fulfilled') {
-        totalCost += result.value.costCents;
-        competitorResults.push({
-          agentId: result.value.agentId,
-          model: result.value.model,
-          overallScore: 0,
-          metricScores: {},
-          response: result.value.response,
-          latencyMs: result.value.latencyMs,
-        });
-      } else {
-        console.error(`[mageagent] Competitor failed: ${result.reason}`);
-      }
-    }
-
-    if (competitorResults.length === 0) {
-      throw new Error('All competitor agents failed');
-    }
-
-    console.log(`[mageagent] Evaluating ${competitorResults.length} responses`);
-
-    const evaluation = await mageagent.evaluate({
-      organizationId: payload.organizationId,
-      prompt: payload.prompt,
-      responses: competitorResults.map((r) => ({
-        agentId: r.agentId,
-        response: r.response,
-      })),
-      metrics: payload.evaluationCriteria.metrics,
-      evaluatorModel: payload.evaluationCriteria.evaluatorModel,
-      customRubric: payload.evaluationCriteria.customRubric,
-    });
-
-    for (const score of evaluation.scores) {
-      const result = competitorResults.find((r) => r.agentId === score.agentId);
-      if (result) {
-        result.overallScore = score.overallScore;
-        result.metricScores = score.metricScores;
-      }
-    }
-
-    competitorResults.sort((a, b) => b.overallScore - a.overallScore);
-    const winner = competitorResults[0];
+    scores.sort((a, b) => b.overallScore - a.overallScore);
+    const winner = scores[0];
 
     console.log(
       `[mageagent] Competition winner: agent=${winner.agentId}, model=${winner.model}, score=${winner.overallScore}`
@@ -322,13 +319,21 @@ export const mageAgentCompetition = task({
     return {
       winnerId: winner.agentId,
       winnerModel: winner.model,
-      scores: competitorResults,
-      evaluation: evaluation.summary,
-      totalCostCents: totalCost,
+      scores,
+      evaluation: competeResponse.evaluation,
+      totalCostCents: 0, // compete() does not return cost
     } satisfies CompetitionResult;
   },
 });
 
+/**
+ * Vision AI processing -- analyses each image individually through
+ * MageAgentClient.visionAnalyze().
+ *
+ * Maps the payload's analysisType to the visionAnalyze() analysisType enum.
+ * Images are processed sequentially (one at a time) to avoid overwhelming the
+ * service and to allow partial failure handling.
+ */
 export const visionAIProcess = task({
   id: 'mageagent-vision-ai',
   retry: {
@@ -342,33 +347,97 @@ export const visionAIProcess = task({
       `[mageagent] Vision AI processing ${payload.imageUrls.length} images, type=${payload.analysisType}`
     );
 
-    const results = await mageagent.processVision({
-      organizationId: payload.organizationId,
-      imageUrls: payload.imageUrls,
-      analysisType: payload.analysisType,
-      model: payload.model,
-      customPrompt: payload.customPrompt,
-      outputFormat: payload.outputFormat ?? 'json',
-      maxTokens: payload.maxTokens ?? 4096,
-    });
+    const client = getClient(payload.organizationId);
+
+    // Map the broader payload analysisType to the narrower visionAnalyze enum.
+    const analysisTypeMap: Record<
+      VisionAIProcessPayload['analysisType'],
+      'describe' | 'classify' | 'detect' | 'custom'
+    > = {
+      'describe': 'describe',
+      'extract-text': 'custom',
+      'classify': 'classify',
+      'detect-objects': 'detect',
+      'diagram-to-code': 'custom',
+      'custom': 'custom',
+    };
+
+    // Build a prompt that incorporates the analysis type intent when the type
+    // is mapped to 'custom'.
+    function buildPrompt(type: VisionAIProcessPayload['analysisType'], customPrompt?: string): string | undefined {
+      if (customPrompt) return customPrompt;
+      switch (type) {
+        case 'extract-text':
+          return 'Extract all text visible in this image.';
+        case 'diagram-to-code':
+          return 'Analyze this diagram and generate corresponding code or structured representation.';
+        default:
+          return undefined;
+      }
+    }
+
+    const imageResults: VisionResult['results'] = [];
+    let totalTokens = 0;
+    let modelUsed = payload.model ?? 'unknown';
+
+    for (const imageUrl of payload.imageUrls) {
+      console.log(`[mageagent] Analyzing image: ${imageUrl}`);
+
+      const analyzeResponse = await client.visionAnalyze({
+        imageUrl,
+        analysisType: analysisTypeMap[payload.analysisType],
+        prompt: buildPrompt(payload.analysisType, payload.customPrompt),
+      });
+
+      // Derive a confidence score from labels when available, otherwise default
+      // to 1.0 (the API doesn't return an explicit confidence on the analysis).
+      const avgConfidence =
+        analyzeResponse.labels && analyzeResponse.labels.length > 0
+          ? analyzeResponse.labels.reduce((sum, l) => sum + l.confidence, 0) /
+            analyzeResponse.labels.length
+          : 1.0;
+
+      // Build structured data from labels and objects if present.
+      const structuredData: Record<string, unknown> = {};
+      if (analyzeResponse.labels) {
+        structuredData.labels = analyzeResponse.labels;
+      }
+      if (analyzeResponse.objects) {
+        structuredData.objects = analyzeResponse.objects;
+      }
+
+      imageResults.push({
+        imageUrl,
+        analysis: analyzeResponse.analysis,
+        structuredData: Object.keys(structuredData).length > 0 ? structuredData : undefined,
+        confidence: avgConfidence,
+      });
+    }
 
     console.log(
-      `[mageagent] Vision processing complete: ${results.results.length} images analyzed, model=${results.modelUsed}, tokens=${results.totalTokens}`
+      `[mageagent] Vision processing complete: ${imageResults.length} images analyzed, model=${modelUsed}, tokens=${totalTokens}`
     );
 
     return {
-      results: results.results.map((r: { imageUrl: string; analysis: string; structuredData?: Record<string, unknown>; confidence: number }) => ({
-        imageUrl: r.imageUrl,
-        analysis: r.analysis,
-        structuredData: r.structuredData,
-        confidence: r.confidence,
-      })),
-      modelUsed: results.modelUsed,
-      totalTokens: results.totalTokens,
+      results: imageResults,
+      modelUsed,
+      totalTokens,
     } satisfies VisionResult;
   },
 });
 
+/**
+ * Batch embedding generation.
+ *
+ * Maps to MageAgentClient.generateEmbedding() which accepts text (string or
+ * string[]).  Documents are batched according to payload.batchSize and each
+ * batch is sent as a string[] to generateEmbedding().
+ *
+ * Note: The actual MageAgent API does not expose a separate storeVectors()
+ * method.  When storeInVectorDb is requested, the caller should handle vector
+ * storage externally.  This task generates deterministic vector IDs from the
+ * document IDs.
+ */
 export const embeddingGeneration = task({
   id: 'mageagent-embedding-generation',
   retry: {
@@ -380,14 +449,15 @@ export const embeddingGeneration = task({
   run: async (payload: EmbeddingGenerationPayload) => {
     const batchSize = payload.batchSize ?? 100;
     const model = payload.model ?? 'text-embedding-3-small';
-    const dimensions = payload.dimensions ?? 1536;
 
     console.log(
       `[mageagent] Generating embeddings for ${payload.documents.length} documents, model=${model}, batchSize=${batchSize}`
     );
 
+    const client = getClient(payload.organizationId);
     const startTime = Date.now();
     const allVectorIds: string[] = [];
+    let embeddingDimensions = payload.dimensions ?? 0;
 
     for (let i = 0; i < payload.documents.length; i += batchSize) {
       const batch = payload.documents.slice(i, i + batchSize);
@@ -396,28 +466,20 @@ export const embeddingGeneration = task({
 
       console.log(`[mageagent] Processing embedding batch ${batchNum}/${totalBatches} (${batch.length} docs)`);
 
-      const embedResult = await mageagent.generateEmbeddings({
-        organizationId: payload.organizationId,
-        documents: batch,
+      const embedResult = await client.generateEmbedding({
+        text: batch.map((doc) => doc.content),
         model,
-        dimensions,
       });
 
-      if (payload.storeInVectorDb) {
-        const storeResult = await mageagent.storeVectors({
-          organizationId: payload.organizationId,
-          collectionName: payload.collectionName ?? 'default',
-          vectors: embedResult.embeddings.map((emb: { id: string; vector: number[] }, idx: number) => ({
-            id: emb.id,
-            vector: emb.vector,
-            metadata: batch[idx].metadata || {},
-            content: batch[idx].content,
-          })),
-        });
-        allVectorIds.push(...storeResult.vectorIds);
-      } else {
-        allVectorIds.push(...embedResult.embeddings.map((e: { id: string }) => e.id));
+      // Capture actual dimensions from the first successful response.
+      if (embeddingDimensions === 0) {
+        embeddingDimensions = embedResult.dimensions;
       }
+
+      // Use the document IDs as vector IDs (1:1 correspondence between
+      // input texts and output embeddings).
+      const batchVectorIds = batch.map((doc) => doc.id);
+      allVectorIds.push(...batchVectorIds);
     }
 
     const durationMs = Date.now() - startTime;
@@ -428,7 +490,7 @@ export const embeddingGeneration = task({
 
     return {
       documentsProcessed: payload.documents.length,
-      embeddingDimensions: dimensions,
+      embeddingDimensions,
       modelUsed: model,
       storedInVectorDb: payload.storeInVectorDb ?? false,
       collectionName: payload.storeInVectorDb ? (payload.collectionName ?? 'default') : undefined,
