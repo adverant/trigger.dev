@@ -277,15 +277,19 @@ class NexusTriggerServer {
   }
 
   private setupHealthEndpoints(): void {
-    // Root health endpoint (K8s plugin-runner expects /health)
+    // Root health endpoint (K8s liveness probe — only check critical internal deps)
     this.app.get('/health', async (_req, res) => {
       try {
         const health = await this.healthChecker.performHealthCheck({
           pool: this.db.getPool(),
           redis: this.redis,
-          triggerApiUrl: this.config.trigger.apiUrl,
+          // Do NOT check triggerApiUrl here — it's an external dependency
+          // and its absence should not cause pod restarts.
+          // Use /trigger/health for the full diagnostic check.
+          memoryThreshold: 98, // Lenient threshold for liveness
         });
-        const statusCode = health.status === 'healthy' ? 200 : health.status === 'degraded' ? 200 : 503;
+        // For liveness: return 200 for healthy/degraded, 503 only for unhealthy
+        const statusCode = health.status === 'unhealthy' ? 503 : 200;
         res.status(statusCode).json(health);
       } catch (err: any) {
         res.status(503).json({ status: 'unhealthy', error: err.message });
