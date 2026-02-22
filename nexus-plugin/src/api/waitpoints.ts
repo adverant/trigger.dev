@@ -80,6 +80,31 @@ export function createWaitpointRouter(
     })
   );
 
+  // POST /:waitpointId/resolve - Resolve (approve/reject) waitpoint
+  // This is what the dashboard frontend calls.
+  // approved=true → complete the waitpoint, approved=false → cancel/expire it
+  router.post(
+    '/:waitpointId/resolve',
+    asyncHandler(async (req: Request, res: Response) => {
+      const { approved, output } = req.body;
+      const waitpointId = req.params.waitpointId;
+      const orgId = req.user!.organizationId;
+
+      if (approved) {
+        const waitpoint = await waitpointService.completeWaitpoint(
+          orgId,
+          waitpointId,
+          output || { approved: true },
+          req.user!.userId
+        );
+        res.json({ success: true, data: waitpoint });
+      } else {
+        await waitpointService.cancelWaitpoint(orgId, waitpointId);
+        res.json({ success: true, data: { cancelled: true } });
+      }
+    })
+  );
+
   // POST /:tokenId/cancel - Cancel waitpoint
   router.post(
     '/:tokenId/cancel',

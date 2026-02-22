@@ -10,18 +10,11 @@ export function createDeploymentRouter(
 ): Router {
   const router = Router();
 
-  // GET / - List deployments
+  // GET / - List deployments (projectId optional — defaults to all for the org)
   router.get(
     '/',
     asyncHandler(async (req: Request, res: Response) => {
-      const projectId = req.query.projectId as string;
-      if (!projectId) {
-        res.status(400).json({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: 'projectId query parameter is required' },
-        });
-        return;
-      }
+      const projectId = (req.query.projectId as string) || undefined;
 
       const deployments = await deploymentService.listDeployments(
         req.user!.organizationId,
@@ -39,14 +32,7 @@ export function createDeploymentRouter(
   router.get(
     '/latest',
     asyncHandler(async (req: Request, res: Response) => {
-      const projectId = req.query.projectId as string;
-      if (!projectId) {
-        res.status(400).json({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: 'projectId query parameter is required' },
-        });
-        return;
-      }
+      const projectId = (req.query.projectId as string) || undefined;
 
       const deployment = await deploymentService.getLatestDeployment(
         req.user!.organizationId,

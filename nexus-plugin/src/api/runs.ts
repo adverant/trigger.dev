@@ -148,6 +148,82 @@ export function createRunRouter(
     })
   );
 
+  // GET /:runId/logs - Get run log entries
+  router.get(
+    '/:runId/logs',
+    asyncHandler(async (req: Request, res: Response) => {
+      const run = await runService.getRun(
+        req.user!.organizationId,
+        req.params.runId
+      );
+
+      // Synthesize log entries from the run's lifecycle events
+      const logs: Array<{ level: string; message: string; timestamp: string; data?: any }> = [];
+
+      if (run.createdAt) {
+        logs.push({
+          level: 'info',
+          message: `Run created for task ${run.taskIdentifier}`,
+          timestamp: typeof run.createdAt === 'string' ? run.createdAt : run.createdAt.toISOString?.() ?? String(run.createdAt),
+        });
+      }
+
+      if (run.startedAt) {
+        logs.push({
+          level: 'info',
+          message: 'Execution started',
+          timestamp: typeof run.startedAt === 'string' ? run.startedAt : run.startedAt.toISOString?.() ?? String(run.startedAt),
+        });
+      }
+
+      if (run.completedAt) {
+        const isError = ['FAILED', 'CRASHED', 'SYSTEM_FAILURE', 'TIMED_OUT'].includes(run.status);
+        logs.push({
+          level: isError ? 'error' : 'info',
+          message: `Run ${run.status.toLowerCase()}${run.errorMessage ? `: ${run.errorMessage}` : ''}`,
+          timestamp: typeof run.completedAt === 'string' ? run.completedAt : run.completedAt.toISOString?.() ?? String(run.completedAt),
+        });
+      }
+
+      res.json({
+        success: true,
+        data: logs,
+      });
+    })
+  );
+
+  // GET /:runId/trace - Get run trace/span data
+  router.get(
+    '/:runId/trace',
+    asyncHandler(async (req: Request, res: Response) => {
+      const run = await runService.getRun(
+        req.user!.organizationId,
+        req.params.runId
+      );
+
+      // Synthesize a basic trace from the run's lifecycle
+      const spans: any[] = [];
+
+      if (run.startedAt && run.completedAt) {
+        const startMs = new Date(run.startedAt).getTime();
+        const endMs = new Date(run.completedAt).getTime();
+        spans.push({
+          spanId: run.runId,
+          operationName: run.taskIdentifier,
+          startTime: typeof run.startedAt === 'string' ? run.startedAt : run.startedAt.toISOString?.() ?? String(run.startedAt),
+          endTime: typeof run.completedAt === 'string' ? run.completedAt : run.completedAt.toISOString?.() ?? String(run.completedAt),
+          durationMs: endMs - startMs,
+          status: run.status,
+        });
+      }
+
+      res.json({
+        success: true,
+        data: { spans },
+      });
+    })
+  );
+
   // POST /:runId/cancel - Cancel run
   router.post(
     '/:runId/cancel',

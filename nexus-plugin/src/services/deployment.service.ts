@@ -23,7 +23,7 @@ export class DeploymentService {
     private db: DatabaseService
   ) {}
 
-  async getLatestDeployment(orgId: string, projectId: string): Promise<any> {
+  async getLatestDeployment(orgId: string, projectId?: string): Promise<any> {
     const triggerResult = await this.proxy.getLatestDeployment();
 
     logger.debug('Fetched latest deployment from Trigger.dev', {
@@ -37,7 +37,7 @@ export class DeploymentService {
 
   async listDeployments(
     orgId: string,
-    projectId: string
+    projectId?: string
   ): Promise<any[]> {
     // Deployments are tracked from Trigger.dev webhook events or polling.
     // For now, we return the latest deployment from the API and any locally tracked ones.
