@@ -46,27 +46,33 @@ const transports: winston.transport[] = [
   }),
 ];
 
-if (NODE_ENV === 'production') {
-  transports.push(
-    new DailyRotateFile({
-      filename: path.join(LOG_DIR, 'error-%DATE%.log'),
-      datePattern: 'YYYY-MM-DD',
-      level: 'error',
-      maxSize: '20m',
-      maxFiles: '14d',
-      format: prodFormat,
-    })
-  );
+// File logging only when LOG_DIR is explicitly set and writable (not in K8s containers)
+const ENABLE_FILE_LOGGING = process.env.ENABLE_FILE_LOGGING === 'true';
+if (NODE_ENV === 'production' && ENABLE_FILE_LOGGING) {
+  try {
+    transports.push(
+      new DailyRotateFile({
+        filename: path.join(LOG_DIR, 'error-%DATE%.log'),
+        datePattern: 'YYYY-MM-DD',
+        level: 'error',
+        maxSize: '20m',
+        maxFiles: '14d',
+        format: prodFormat,
+      })
+    );
 
-  transports.push(
-    new DailyRotateFile({
-      filename: path.join(LOG_DIR, 'combined-%DATE%.log'),
-      datePattern: 'YYYY-MM-DD',
-      maxSize: '20m',
-      maxFiles: '14d',
-      format: prodFormat,
-    })
-  );
+    transports.push(
+      new DailyRotateFile({
+        filename: path.join(LOG_DIR, 'combined-%DATE%.log'),
+        datePattern: 'YYYY-MM-DD',
+        maxSize: '20m',
+        maxFiles: '14d',
+        format: prodFormat,
+      })
+    );
+  } catch (err) {
+    // File logging unavailable - console only
+  }
 }
 
 const winstonLogger = winston.createLogger({
