@@ -74,7 +74,7 @@ interface StatusBadgeProps {
 export default function StatusBadge({ status, size = 'sm', showDot = true, className }: StatusBadgeProps) {
   const style = statusStyles[status] || statusStyles.unknown;
   const dotColor = statusDotColors[status] || statusDotColors.unknown;
-  const label = status.replace(/_/g, ' ');
+  const label = (status || 'unknown').replace(/_/g, ' ');
 
   return (
     <span

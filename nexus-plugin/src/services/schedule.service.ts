@@ -90,7 +90,7 @@ export class ScheduleService {
     return schedule;
   }
 
-  async listSchedules(orgId: string, projectId: string): Promise<Schedule[]> {
+  async listSchedules(orgId: string, projectId?: string): Promise<Schedule[]> {
     return this.scheduleRepo.findByOrgId(orgId, {});
   }
 

@@ -15,6 +15,28 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger({ component: 'api-integrations' });
 
+/**
+ * Transform backend IntegrationConfig to the format the UI expects.
+ */
+function toUIIntegration(config: any): Record<string, any> {
+  const serviceName = config.serviceName || '';
+  return {
+    id: config.configId || serviceName,
+    service: serviceName,
+    displayName: serviceName
+      .replace(/[-_]/g, ' ')
+      .replace(/\b\w/g, (c: string) => c.toUpperCase()),
+    enabled: config.enabled || false,
+    url: config.serviceUrl || '',
+    health: config.healthStatus || 'unknown',
+    lastCheckAt: config.lastHealthCheck
+      ? (config.lastHealthCheck.toISOString?.() ?? String(config.lastHealthCheck))
+      : null,
+    taskTemplates: [],
+    config: config.config || {},
+  };
+}
+
 const VALID_SERVICES: ServiceName[] = [
   'graphrag',
   'mageagent',
@@ -70,7 +92,7 @@ export function createIntegrationRouter(
 
       res.json({
         success: true,
-        data: allConfigs,
+        data: allConfigs.map(toUIIntegration),
       });
     })
   );
