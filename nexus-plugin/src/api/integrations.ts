@@ -13,6 +13,7 @@ import { WS_EVENTS } from '../websocket/events';
 import { emitToOrg } from '../websocket/socket-server';
 import { asyncHandler } from '../middleware/error-handler';
 import { createLogger } from '../utils/logger';
+import type { ServiceClientRegistry } from '../services/client-registry';
 
 const logger = createLogger({ component: 'api-integrations' });
 
@@ -71,7 +72,8 @@ export function createIntegrationRouter(
   integrationConfigRepo: IntegrationConfigRepository,
   nexusConfig: NexusConfig,
   io: SocketIOServer,
-  taskTemplateRepo?: TaskTemplateRepository
+  taskTemplateRepo?: TaskTemplateRepository,
+  clientRegistry?: ServiceClientRegistry
 ): Router {
   const router = Router();
 
@@ -236,6 +238,7 @@ export function createIntegrationRouter(
   );
 
   // POST /:serviceName/test - Test integration connection
+  // Returns TestResult format: { success, message, latencyMs, details }
   router.post(
     '/:serviceName/test',
     asyncHandler(async (req: Request, res: Response) => {
@@ -259,35 +262,103 @@ export function createIntegrationRouter(
       const serviceUrl =
         config?.serviceUrl || (nexusConfig.services as any)[serviceName] || '';
 
+      // Service not configured or not deployed
       if (!serviceUrl) {
         res.json({
           success: true,
           data: {
-            reachable: false,
+            success: false,
+            message: 'Service not deployed or URL not configured',
             latencyMs: 0,
-            error: 'No service URL configured',
+            details: {
+              endpoint: '',
+              method: 'GET',
+              responseStatus: 0,
+              capabilities: [],
+            },
           },
         });
         return;
       }
 
+      // Try using the registered integration client first (uses service-specific health checks)
+      const client = clientRegistry?.get(serviceName);
+      if (client) {
+        try {
+          const result = await client.healthCheck();
+          const healthStatus: HealthStatus = result.status === 'healthy' ? 'healthy' : result.status === 'degraded' ? 'degraded' : 'unhealthy';
+
+          await integrationConfigRepo.updateHealthStatus(
+            req.user!.organizationId,
+            serviceName,
+            healthStatus,
+            new Date()
+          );
+
+          emitToOrg(io, req.user!.organizationId, WS_EVENTS.INTEGRATION_HEALTH_CHANGED, {
+            serviceName,
+            healthStatus,
+          });
+
+          res.json({
+            success: true,
+            data: {
+              success: result.status === 'healthy' || result.status === 'degraded',
+              message: result.status === 'healthy'
+                ? `${serviceName} is healthy`
+                : result.status === 'degraded'
+                  ? `${serviceName} is degraded but reachable`
+                  : `${serviceName} is unreachable`,
+              latencyMs: result.latency,
+              details: {
+                endpoint: `${serviceUrl}/health`,
+                method: 'GET',
+                responseStatus: result.status === 'unhealthy' ? 503 : 200,
+                capabilities: config?.config?.capabilities || [],
+              },
+            },
+          });
+          return;
+        } catch (err: any) {
+          logger.warn(`Client healthCheck failed for ${serviceName}, falling back to raw HTTP`, { error: err.message });
+        }
+      }
+
+      // Fallback: raw HTTP health check
       const start = Date.now();
       try {
         const healthUrl = `${serviceUrl.replace(/\/$/, '')}/health`;
-        await axios.get(healthUrl, { timeout: 10000, validateStatus: (s) => s < 500 });
+        const response = await axios.get(healthUrl, { timeout: 10000, validateStatus: (s) => s < 500 });
         const latencyMs = Date.now() - start;
 
-        // Update health status
+        const isHealthy = response.status >= 200 && response.status < 300;
+        const healthStatus: HealthStatus = isHealthy ? 'healthy' : 'degraded';
+
         await integrationConfigRepo.updateHealthStatus(
           req.user!.organizationId,
           serviceName,
-          'healthy',
+          healthStatus,
           new Date()
         );
 
+        emitToOrg(io, req.user!.organizationId, WS_EVENTS.INTEGRATION_HEALTH_CHANGED, {
+          serviceName,
+          healthStatus,
+        });
+
         res.json({
           success: true,
-          data: { reachable: true, latencyMs },
+          data: {
+            success: isHealthy,
+            message: isHealthy ? `${serviceName} is healthy` : `${serviceName} returned status ${response.status}`,
+            latencyMs,
+            details: {
+              endpoint: healthUrl,
+              method: 'GET',
+              responseStatus: response.status,
+              capabilities: config?.config?.capabilities || [],
+            },
+          },
         });
       } catch (err: any) {
         const latencyMs = Date.now() - start;
@@ -299,12 +370,23 @@ export function createIntegrationRouter(
           new Date()
         );
 
+        emitToOrg(io, req.user!.organizationId, WS_EVENTS.INTEGRATION_HEALTH_CHANGED, {
+          serviceName,
+          healthStatus: 'unhealthy',
+        });
+
         res.json({
           success: true,
           data: {
-            reachable: false,
+            success: false,
+            message: `${serviceName} is unreachable: ${err.message}`,
             latencyMs,
-            error: err.message,
+            details: {
+              endpoint: `${serviceUrl}/health`,
+              method: 'GET',
+              responseStatus: err.response?.status || 0,
+              capabilities: [],
+            },
           },
         });
       }

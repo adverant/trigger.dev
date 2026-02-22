@@ -61,8 +61,10 @@ import { TaskTemplateRepository } from './database/repositories/task-template.re
 // Import Trigger.dev client factory
 import { createTriggerClients } from './config/trigger-client';
 
-// Import integration clients
-import { GraphRAGClient } from './integrations/graphrag.client';
+// Import integration clients and health worker
+import { buildClientRegistry, ServiceClientRegistry } from './services/client-registry';
+import { HealthWorkerService } from './services/health-worker.service';
+import type { ServiceName } from './database/repositories/integration-config.repository';
 
 const logger = createLogger({ service: 'nexus-trigger', component: 'server' });
 
@@ -76,6 +78,8 @@ class NexusTriggerServer {
   private healthChecker: HealthChecker;
   private runStreamManager: RunStreamManager;
   private syncService: SyncService;
+  private healthWorker: HealthWorkerService;
+  private clientRegistry: ServiceClientRegistry;
   private config: ReturnType<typeof loadConfig>;
 
   constructor() {
@@ -118,8 +122,10 @@ class NexusTriggerServer {
       pollIntervalMs: 3000,
     });
 
-    // Initialize sync service (placeholder - will be fully wired in start())
+    // Initialize sync service and health worker (placeholders - wired in start())
     this.syncService = null as any;
+    this.healthWorker = null as any;
+    this.clientRegistry = new Map();
   }
 
   async start(): Promise<void> {
@@ -149,8 +155,14 @@ class NexusTriggerServer {
       // Initialize Trigger.dev proxy service
       const triggerProxy = new TriggerProxyService(triggerClients.managementApi);
 
-      // Initialize integration clients
-      const graphragClient = new GraphRAGClient('system');
+      // Build integration client registry (all 10 clients)
+      this.clientRegistry = buildClientRegistry(this.config.nexus.services, 'system');
+      logger.info('Integration client registry built', {
+        clients: Array.from(this.clientRegistry.keys()),
+      });
+
+      // Auto-seed integration configs with correct URLs for all orgs
+      await this.seedIntegrationConfigs(integrationConfigRepo);
 
       // Initialize services (match actual constructor signatures)
       const projectService = new ProjectService(projectRepo, usageRepo);
@@ -191,7 +203,8 @@ class NexusTriggerServer {
         deploymentService,
         queueService,
         integrationConfigRepo,
-        taskTemplateRepo
+        taskTemplateRepo,
+        this.clientRegistry
       );
 
       // Serve UI static files
@@ -209,6 +222,15 @@ class NexusTriggerServer {
 
       // Start periodic sync (every 30 seconds)
       this.syncService.startPeriodicSync(30000);
+
+      // Start background health check worker (every 60 seconds)
+      this.healthWorker = new HealthWorkerService(
+        integrationConfigRepo,
+        this.clientRegistry,
+        this.io,
+        60000
+      );
+      this.healthWorker.start();
 
       // Start server
       const port = this.config.plugin.port;
@@ -381,7 +403,8 @@ class NexusTriggerServer {
     deploymentService: DeploymentService,
     queueService: QueueService,
     integrationConfigRepo: IntegrationConfigRepository,
-    taskTemplateRepo: TaskTemplateRepository
+    taskTemplateRepo: TaskTemplateRepository,
+    clientRegistry: ServiceClientRegistry
   ): void {
     const apiRouter = express.Router();
 
@@ -403,11 +426,87 @@ class NexusTriggerServer {
     apiRouter.use('/environments', createEnvironmentRouter(triggerProxy));
     apiRouter.use('/deployments', createDeploymentRouter(deploymentService));
     apiRouter.use('/queues', createQueueRouter(queueService, this.io));
-    apiRouter.use('/integrations', createIntegrationRouter(integrationConfigRepo, this.config.nexus, this.io, taskTemplateRepo));
+    apiRouter.use('/integrations', createIntegrationRouter(integrationConfigRepo, this.config.nexus, this.io, taskTemplateRepo, clientRegistry));
 
     this.app.use('/trigger/api/v1', apiRouter);
 
     logger.info('API routes mounted at /trigger/api/v1');
+  }
+
+  /**
+   * Seed integration configs with correct default URLs for services
+   * that don't yet have DB rows. Also fixes empty service_url for existing rows.
+   */
+  private async seedIntegrationConfigs(
+    integrationConfigRepo: IntegrationConfigRepository
+  ): Promise<void> {
+    const services = this.config.nexus.services;
+
+    // Map config keys to service names used in DB
+    const serviceMapping: Array<{ dbName: ServiceName; configKey: keyof typeof services; deployed: boolean }> = [
+      { dbName: 'graphrag', configKey: 'graphrag', deployed: true },
+      { dbName: 'mageagent', configKey: 'mageagent', deployed: true },
+      { dbName: 'fileprocess', configKey: 'fileprocess', deployed: true },
+      { dbName: 'learningagent', configKey: 'learningagent', deployed: true },
+      { dbName: 'geoagent', configKey: 'geoagent', deployed: true },
+      { dbName: 'jupyter', configKey: 'jupyter', deployed: true },
+      { dbName: 'cvat', configKey: 'cvat', deployed: true },
+      { dbName: 'gpu-bridge', configKey: 'gpuBridge', deployed: false },
+      { dbName: 'sandbox', configKey: 'sandbox', deployed: false },
+      { dbName: 'n8n', configKey: 'n8n', deployed: true },
+    ];
+
+    // Use a system org ID for seeding — real orgs get their rows when they first access
+    // We seed for ALL existing orgs in the integration_configs table
+    // First, get all known org IDs
+    let orgIds: string[] = [];
+    try {
+      const rows = await this.db.getPool().query(
+        `SELECT DISTINCT organization_id FROM trigger.integration_configs`
+      );
+      orgIds = rows.rows.map((r: any) => r.organization_id);
+    } catch {
+      // Table might be empty
+    }
+
+    // If no orgs exist yet, nothing to seed
+    if (orgIds.length === 0) {
+      logger.info('No existing orgs found, skipping integration seed');
+      return;
+    }
+
+    let seeded = 0;
+    let updated = 0;
+
+    for (const orgId of orgIds) {
+      for (const { dbName, configKey, deployed } of serviceMapping) {
+        const url = services[configKey];
+
+        try {
+          const existing = await integrationConfigRepo.findByService(orgId, dbName);
+
+          if (!existing) {
+            // Insert new row
+            await integrationConfigRepo.upsert(orgId, dbName, {
+              enabled: deployed && !!url,
+              serviceUrl: url || '',
+            });
+            seeded++;
+          } else if (!existing.serviceUrl && url) {
+            // Fix empty URL
+            await integrationConfigRepo.upsert(orgId, dbName, {
+              serviceUrl: url,
+              enabled: deployed,
+            });
+            updated++;
+          }
+        } catch (err: any) {
+          logger.warn(`Failed to seed ${dbName} for org ${orgId}`, { error: err.message });
+        }
+      }
+    }
+
+    logger.info('Integration configs seeded', { seeded, updated, orgs: orgIds.length });
   }
 
   private setupUI(): void {
@@ -446,6 +545,11 @@ class NexusTriggerServer {
       // Stop periodic sync
       if (this.syncService) {
         this.syncService.stopPeriodicSync();
+      }
+
+      // Stop health worker
+      if (this.healthWorker) {
+        this.healthWorker.stop();
       }
 
       // Close WebSocket connections

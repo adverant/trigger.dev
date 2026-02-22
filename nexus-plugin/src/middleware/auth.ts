@@ -15,6 +15,8 @@ import { UnauthorizedError } from './error-handler';
 
 const logger = createLogger({ component: 'auth-middleware' });
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 declare global {
   namespace Express {
     interface Request {
@@ -71,9 +73,28 @@ export function requireAuth(authClient: NexusAuthClient) {
         throw new UnauthorizedError('Invalid or expired token');
       }
 
+      // Validate organizationId is a valid UUID (Postgres UUID column will reject non-UUIDs)
+      let orgId = user.organizationId;
+      if (!orgId || !UUID_REGEX.test(orgId)) {
+        // Fallback: if orgId is not a valid UUID, try userId
+        if (user.userId && UUID_REGEX.test(user.userId)) {
+          logger.warn('organizationId is not a valid UUID, falling back to userId', {
+            organizationId: orgId,
+            userId: user.userId,
+          });
+          orgId = user.userId;
+        } else {
+          logger.error('Neither organizationId nor userId is a valid UUID', {
+            organizationId: orgId,
+            userId: user.userId,
+          });
+          throw new UnauthorizedError('Invalid organization context');
+        }
+      }
+
       req.user = {
         userId: user.userId,
-        organizationId: user.organizationId,
+        organizationId: orgId,
         tier: user.tier,
         email: user.email,
         name: user.name,
@@ -81,7 +102,7 @@ export function requireAuth(authClient: NexusAuthClient) {
 
       logger.debug('Authentication successful', {
         userId: user.userId,
-        organizationId: user.organizationId,
+        organizationId: orgId,
         tier: user.tier,
       });
 

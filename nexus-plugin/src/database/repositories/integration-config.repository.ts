@@ -106,6 +106,23 @@ export class IntegrationConfigRepository {
     );
   }
 
+  /**
+   * Update health status for a service across ALL organizations.
+   * Used by the background health worker.
+   */
+  async updateHealthStatusAll(
+    serviceName: ServiceName,
+    status: HealthStatus,
+    checkTime: Date
+  ): Promise<void> {
+    await this.db.query(
+      `UPDATE trigger.integration_configs
+       SET health_status = $1, last_health_check = $2
+       WHERE service_name = $3`,
+      [status, checkTime, serviceName]
+    );
+  }
+
   async getEnabled(orgId: string): Promise<IntegrationConfig[]> {
     const rows = await this.db.queryMany<any>(
       `SELECT * FROM trigger.integration_configs
