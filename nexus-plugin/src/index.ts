@@ -66,6 +66,9 @@ import { buildClientRegistry, ServiceClientRegistry } from './services/client-re
 import { HealthWorkerService } from './services/health-worker.service';
 import type { ServiceName } from './database/repositories/integration-config.repository';
 
+// Import task definition registry for auto-seeding
+import { TASK_REGISTRY, toUpsertData } from './task-definitions/registry';
+
 const logger = createLogger({ service: 'nexus-trigger', component: 'server' });
 
 class NexusTriggerServer {
@@ -163,6 +166,9 @@ class NexusTriggerServer {
 
       // Auto-seed integration configs with correct URLs for all orgs
       await this.seedIntegrationConfigs(integrationConfigRepo);
+
+      // Auto-seed task definitions so the Tasks page is populated
+      await this.seedTaskDefinitions(taskDefRepo, projectRepo);
 
       // Initialize services (match actual constructor signatures)
       const projectService = new ProjectService(projectRepo, usageRepo);
@@ -507,6 +513,74 @@ class NexusTriggerServer {
     }
 
     logger.info('Integration configs seeded', { seeded, updated, orgs: orgIds.length });
+  }
+
+  /**
+   * Seed the 40 Nexus task definitions into the DB for every known org.
+   * Creates a default project per org if none exists yet.
+   */
+  private async seedTaskDefinitions(
+    taskDefRepo: TaskDefinitionRepository,
+    projectRepo: ProjectRepository
+  ): Promise<void> {
+    // Collect all known org IDs from integration_configs (same source as seedIntegrationConfigs)
+    let orgIds: string[] = [];
+    try {
+      const rows = await this.db.getPool().query(
+        `SELECT DISTINCT organization_id FROM trigger.integration_configs`
+      );
+      orgIds = rows.rows.map((r: any) => r.organization_id);
+    } catch {
+      // Table may not exist yet
+    }
+
+    if (orgIds.length === 0) {
+      logger.info('No existing orgs found, skipping task definition seed');
+      return;
+    }
+
+    let seeded = 0;
+
+    for (const orgId of orgIds) {
+      // Ensure org has at least one project (needed for task_definitions FK)
+      let projects = await projectRepo.findByOrgId(orgId);
+      if (projects.length === 0) {
+        try {
+          const project = await projectRepo.create({
+            organizationId: orgId,
+            userId: orgId, // system-created
+            triggerProjectRef: 'nexus-default',
+            triggerProjectName: 'Nexus Default Project',
+            environment: 'production',
+            mode: 'self-hosted',
+          });
+          projects = [project];
+          logger.info('Created default project for org', { orgId, projectId: project.projectId });
+        } catch (err: any) {
+          // May already exist from another process
+          projects = await projectRepo.findByOrgId(orgId);
+          if (projects.length === 0) {
+            logger.warn('Cannot seed tasks: no project for org', { orgId, error: err.message });
+            continue;
+          }
+        }
+      }
+
+      const projectId = projects[0].projectId;
+
+      for (const entry of TASK_REGISTRY) {
+        try {
+          await taskDefRepo.upsert(toUpsertData(entry, projectId, orgId));
+          seeded++;
+        } catch (err: any) {
+          logger.warn(`Failed to seed task ${entry.taskIdentifier} for org ${orgId}`, {
+            error: err.message,
+          });
+        }
+      }
+    }
+
+    logger.info('Task definitions seeded', { seeded, orgs: orgIds.length, tasks: TASK_REGISTRY.length });
   }
 
   private setupUI(): void {
