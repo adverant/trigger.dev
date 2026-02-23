@@ -12,6 +12,8 @@ import { QueueService } from '../services/queue.service';
 import { SyncService } from '../services/sync.service';
 import { TriggerProxyService } from '../services/trigger-proxy.service';
 import { IntegrationConfigRepository } from '../database/repositories/integration-config.repository';
+import { ProjectRepository } from '../database/repositories/project.repository';
+import { DatabaseService } from '../database/database.service';
 import { NexusConfig } from '../config';
 import { createProjectRouter } from './projects';
 import { createTaskRouter } from './tasks';
@@ -22,6 +24,7 @@ import { createEnvironmentRouter } from './environments';
 import { createDeploymentRouter } from './deployments';
 import { createQueueRouter } from './queues';
 import { createIntegrationRouter } from './integrations';
+import { createSettingsRouter } from './settings';
 
 export interface RouterDependencies {
   authClient: NexusAuthClient;
@@ -36,6 +39,8 @@ export interface RouterDependencies {
   syncService: SyncService;
   triggerProxy: TriggerProxyService;
   integrationConfigRepo: IntegrationConfigRepository;
+  projectRepo: ProjectRepository;
+  db: DatabaseService;
   nexusConfig: NexusConfig;
 }
 
@@ -51,7 +56,7 @@ export function createApiRouter(deps: RouterDependencies): Router {
   router.use('/projects', createProjectRouter(deps.projectService, deps.io));
   router.use('/tasks', createTaskRouter(deps.taskService, deps.io));
   router.use('/runs', createRunRouter(deps.runService, deps.io));
-  router.use('/schedules', createScheduleRouter(deps.scheduleService, deps.io));
+  router.use('/schedules', createScheduleRouter(deps.scheduleService, deps.io, deps.projectRepo));
   router.use('/waitpoints', createWaitpointRouter(deps.waitpointService, deps.io));
   router.use('/environments', createEnvironmentRouter(deps.triggerProxy));
   router.use('/deployments', createDeploymentRouter(deps.deploymentService));
@@ -60,6 +65,7 @@ export function createApiRouter(deps: RouterDependencies): Router {
     '/integrations',
     createIntegrationRouter(deps.integrationConfigRepo, deps.nexusConfig, deps.io)
   );
+  router.use('/settings', createSettingsRouter(deps.db));
 
   return router;
 }

@@ -35,6 +35,7 @@ import { createEnvironmentRouter } from './api/environments';
 import { createDeploymentRouter } from './api/deployments';
 import { createQueueRouter } from './api/queues';
 import { createIntegrationRouter } from './api/integrations';
+import { createSettingsRouter } from './api/settings';
 
 // Import services
 import { TriggerProxyService } from './services/trigger-proxy.service';
@@ -210,7 +211,8 @@ class NexusTriggerServer {
         queueService,
         integrationConfigRepo,
         taskTemplateRepo,
-        this.clientRegistry
+        this.clientRegistry,
+        projectRepo
       );
 
       // Serve UI static files
@@ -410,7 +412,8 @@ class NexusTriggerServer {
     queueService: QueueService,
     integrationConfigRepo: IntegrationConfigRepository,
     taskTemplateRepo: TaskTemplateRepository,
-    clientRegistry: ServiceClientRegistry
+    clientRegistry: ServiceClientRegistry,
+    projectRepo: ProjectRepository
   ): void {
     const apiRouter = express.Router();
 
@@ -427,12 +430,13 @@ class NexusTriggerServer {
     apiRouter.use('/projects', createProjectRouter(projectService, this.io));
     apiRouter.use('/tasks', createTaskRouter(taskService, this.io));
     apiRouter.use('/runs', createRunRouter(runService, this.io));
-    apiRouter.use('/schedules', createScheduleRouter(scheduleService, this.io));
+    apiRouter.use('/schedules', createScheduleRouter(scheduleService, this.io, projectRepo));
     apiRouter.use('/waitpoints', createWaitpointRouter(waitpointService, this.io));
     apiRouter.use('/environments', createEnvironmentRouter(triggerProxy));
     apiRouter.use('/deployments', createDeploymentRouter(deploymentService));
     apiRouter.use('/queues', createQueueRouter(queueService, this.io));
     apiRouter.use('/integrations', createIntegrationRouter(integrationConfigRepo, this.config.nexus, this.io, taskTemplateRepo, clientRegistry));
+    apiRouter.use('/settings', createSettingsRouter(this.db));
 
     this.app.use('/trigger/api/v1', apiRouter);
 

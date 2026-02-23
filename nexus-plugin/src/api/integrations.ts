@@ -65,6 +65,7 @@ const VALID_SERVICES: ServiceName[] = [
 const updateIntegrationSchema = Joi.object({
   enabled: Joi.boolean().optional(),
   serviceUrl: Joi.string().uri().allow('').optional(),
+  url: Joi.string().uri().allow('').optional(),
   config: Joi.object().optional(),
 }).min(1);
 
@@ -186,20 +187,29 @@ export function createIntegrationRouter(
     })
   );
 
-  // PUT /:serviceName - Update/enable integration config
+  // PUT /:serviceNameOrId - Update/enable integration config
+  // Accepts either a serviceName (e.g. "graphrag") or a configId UUID
   router.put(
-    '/:serviceName',
+    '/:serviceNameOrId',
     asyncHandler(async (req: Request, res: Response) => {
-      const serviceName = req.params.serviceName as ServiceName;
+      let serviceName = req.params.serviceNameOrId as ServiceName;
+
+      // If param isn't a valid service name, try resolving as configId
       if (!VALID_SERVICES.includes(serviceName)) {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: `Invalid service name: ${serviceName}`,
-          },
-        });
-        return;
+        const configs = await integrationConfigRepo.findByOrgId(req.user!.organizationId);
+        const match = configs.find((c) => c.configId === req.params.serviceNameOrId);
+        if (match) {
+          serviceName = match.serviceName;
+        } else {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: `Invalid service name or integration ID: ${req.params.serviceNameOrId}`,
+            },
+          });
+          return;
+        }
       }
 
       const { error, value } = updateIntegrationSchema.validate(req.body, { abortEarly: false });
@@ -220,7 +230,7 @@ export function createIntegrationRouter(
         serviceName,
         {
           enabled: value.enabled,
-          serviceUrl: value.serviceUrl,
+          serviceUrl: value.serviceUrl || value.url,
           config: value.config,
         }
       );
@@ -237,21 +247,30 @@ export function createIntegrationRouter(
     })
   );
 
-  // POST /:serviceName/test - Test integration connection
+  // POST /:serviceNameOrId/test - Test integration connection
   // Returns TestResult format: { success, message, latencyMs, details }
+  // Accepts either serviceName or configId UUID
   router.post(
-    '/:serviceName/test',
+    '/:serviceNameOrId/test',
     asyncHandler(async (req: Request, res: Response) => {
-      const serviceName = req.params.serviceName as ServiceName;
+      let serviceName = req.params.serviceNameOrId as ServiceName;
+
+      // Resolve configId to serviceName if needed
       if (!VALID_SERVICES.includes(serviceName)) {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: `Invalid service name: ${serviceName}`,
-          },
-        });
-        return;
+        const configs = await integrationConfigRepo.findByOrgId(req.user!.organizationId);
+        const match = configs.find((c) => c.configId === req.params.serviceNameOrId);
+        if (match) {
+          serviceName = match.serviceName;
+        } else {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: `Invalid service name or integration ID: ${req.params.serviceNameOrId}`,
+            },
+          });
+          return;
+        }
       }
 
       const config = await integrationConfigRepo.findByService(

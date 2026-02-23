@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { Server as SocketIOServer } from 'socket.io';
 import Joi from 'joi';
 import { ScheduleService } from '../services/schedule.service';
+import { ProjectRepository } from '../database/repositories/project.repository';
 import { asyncHandler } from '../middleware/error-handler';
 import { createLogger } from '../utils/logger';
 
@@ -38,8 +39,9 @@ function toUISchedule(schedule: any): Record<string, any> {
 }
 
 const createScheduleSchema = Joi.object({
-  projectId: Joi.string().uuid().required(),
-  task: Joi.string().required(),
+  projectId: Joi.string().uuid().optional(),
+  task: Joi.string().optional(),
+  taskId: Joi.string().optional(),
   cron: Joi.string().required(),
   externalId: Joi.string().optional(),
   deduplicationKey: Joi.string().optional(),
@@ -47,7 +49,7 @@ const createScheduleSchema = Joi.object({
   description: Joi.string().optional(),
   payload: Joi.object().optional(),
   environments: Joi.array().items(Joi.string()).optional(),
-});
+}).or('task', 'taskId');
 
 const updateScheduleSchema = Joi.object({
   cron: Joi.string().optional(),
@@ -59,7 +61,8 @@ const updateScheduleSchema = Joi.object({
 
 export function createScheduleRouter(
   scheduleService: ScheduleService,
-  io: SocketIOServer
+  io: SocketIOServer,
+  projectRepo?: ProjectRepository
 ): Router {
   const router = Router();
 
@@ -80,12 +83,28 @@ export function createScheduleRouter(
         return;
       }
 
+      // Auto-resolve projectId if not provided
+      let projectId = value.projectId;
+      if (!projectId && projectRepo) {
+        const projects = await projectRepo.findByOrgId(req.user!.organizationId);
+        if (projects.length > 0) {
+          projectId = projects[0].projectId;
+        }
+      }
+      if (!projectId) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'No project found for this organization' },
+        });
+        return;
+      }
+
       const schedule = await scheduleService.createSchedule(
         req.user!.organizationId,
         req.user!.userId,
-        value.projectId,
+        projectId,
         {
-          task: value.task,
+          task: value.task || value.taskId,
           cron: value.cron,
           externalId: value.externalId,
           deduplicationKey: value.deduplicationKey,
