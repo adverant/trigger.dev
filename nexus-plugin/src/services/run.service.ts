@@ -160,17 +160,23 @@ export class RunService {
   }
 
   async getStatistics(orgId: string): Promise<any> {
-    const raw = await this.runRepo.getStatistics(orgId);
+    const [raw, runsByHour, taskHealth] = await Promise.all([
+      this.runRepo.getStatistics(orgId),
+      this.runRepo.getRunsByHour(orgId),
+      this.runRepo.getTaskHealth(orgId),
+    ]);
 
-    // Transform to the format the UI expects (RunStatistics interface)
+    // Count currently active (non-terminal) runs
+    const activeRuns = raw.totalRuns - raw.completedRuns - raw.failedRuns;
+
     return {
       totalTasks: raw.totalRuns,
-      activeRuns: raw.completedRuns > 0 ? raw.totalRuns - raw.completedRuns - raw.failedRuns : 0,
+      activeRuns: activeRuns > 0 ? activeRuns : 0,
       scheduledJobs: 0,
       pendingWaitpoints: 0,
       failedLast24h: raw.failedRuns,
-      runsByHour: [],
-      taskHealth: [],
+      runsByHour,
+      taskHealth,
     };
   }
 

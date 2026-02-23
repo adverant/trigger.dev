@@ -282,6 +282,61 @@ export class RunRepository {
     };
   }
 
+  async getRunsByHour(orgId: string): Promise<Array<{ hour: string; count: number; failed: number }>> {
+    const rows = await this.db.queryMany<any>(
+      `WITH hours AS (
+         SELECT generate_series(
+           DATE_TRUNC('hour', NOW() - INTERVAL '23 hours'),
+           DATE_TRUNC('hour', NOW()),
+           '1 hour'
+         ) AS hour_bucket
+       )
+       SELECT
+         TO_CHAR(h.hour_bucket, 'HH24:00') AS hour,
+         COALESCE(COUNT(r.run_id), 0)::int AS count,
+         COALESCE(COUNT(r.run_id) FILTER (WHERE r.status IN ('FAILED', 'CRASHED', 'SYSTEM_FAILURE', 'TIMED_OUT')), 0)::int AS failed
+       FROM hours h
+       LEFT JOIN trigger.run_history r
+         ON r.organization_id = $1
+         AND r.created_at >= h.hour_bucket
+         AND r.created_at < h.hour_bucket + INTERVAL '1 hour'
+       GROUP BY h.hour_bucket
+       ORDER BY h.hour_bucket ASC`,
+      [orgId]
+    );
+
+    return rows.map((row) => ({
+      hour: row.hour,
+      count: parseInt(row.count || '0', 10),
+      failed: parseInt(row.failed || '0', 10),
+    }));
+  }
+
+  async getTaskHealth(orgId: string): Promise<Array<{ taskIdentifier: string; total: number; completed: number; failed: number; avgDurationMs: number | null }>> {
+    const rows = await this.db.queryMany<any>(
+      `SELECT
+         task_identifier,
+         COUNT(*) AS total,
+         COUNT(*) FILTER (WHERE status = 'COMPLETED') AS completed,
+         COUNT(*) FILTER (WHERE status IN ('FAILED', 'CRASHED', 'SYSTEM_FAILURE', 'TIMED_OUT')) AS failed,
+         ROUND(AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL), 2) AS avg_duration_ms
+       FROM trigger.run_history
+       WHERE organization_id = $1 AND created_at >= NOW() - INTERVAL '24 hours'
+       GROUP BY task_identifier
+       ORDER BY COUNT(*) DESC
+       LIMIT 20`,
+      [orgId]
+    );
+
+    return rows.map((row) => ({
+      taskIdentifier: row.task_identifier,
+      total: parseInt(row.total || '0', 10),
+      completed: parseInt(row.completed || '0', 10),
+      failed: parseInt(row.failed || '0', 10),
+      avgDurationMs: row.avg_duration_ms ? parseFloat(row.avg_duration_ms) : null,
+    }));
+  }
+
   private mapRow(row: any): Run {
     return {
       runId: row.run_id,
