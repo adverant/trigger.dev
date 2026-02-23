@@ -141,9 +141,16 @@ export function createRunRouter(
         req.params.runId
       );
 
+      // Normalize to UI format (same shape as list endpoint)
+      const uiRun = toUIRun(run as Run);
+      // Merge any extra fields from Trigger.dev proxy
+      if (run.triggerData) {
+        uiRun.triggerData = run.triggerData;
+      }
+
       res.json({
         success: true,
-        data: run,
+        data: uiRun,
       });
     })
   );
