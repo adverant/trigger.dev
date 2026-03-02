@@ -21,7 +21,7 @@
  *   functional_score     ≥ 60%   (waitpoint on failure)
  */
 
-import { task, wait } from '@trigger.dev/sdk/v3';
+import { task } from '@trigger.dev/sdk/v3';
 import { EEDesignClient } from '../integrations/ee-design.client';
 import type { QualityGateResult } from '../integrations/ee-design.client';
 
@@ -296,41 +296,21 @@ export const ralphLoop = task({
           break;
 
         case 'ESCALATE':
-          console.log(`[ralph-loop] Escalating to human review`);
-          escalated = true;
-
-          // Create waitpoint for human review
-          const waitResult = await wait.for<{ approved: boolean; adjustedParams?: Record<string, unknown> }>({
-            id: `quality-gate-review-${payload.projectId}-iter-${iteration}`,
-            timeout: '24h', // Wait up to 24 hours for human review
-          });
-
-          if (waitResult.approved) {
-            console.log(`[ralph-loop] Human approved — continuing with adjustments`);
-            escalationApproved = true;
-            if (waitResult.adjustedParams) {
-              currentParams = { ...currentParams, ...waitResult.adjustedParams };
-            }
-            // Reset failure counters after human intervention
-            failureHistory.smoke_test_fatals = 0;
-            failureHistory.visual_score = 0;
-            failureHistory.functional_score = 0;
-            failureHistory.other = 0;
-          } else {
-            console.log(`[ralph-loop] Human rejected — stopping loop`);
-            return {
-              success: false,
-              totalIterations: maxIterations,
-              finalIteration: iteration,
-              decisions,
-              qualityGates: finalQualityGates,
-              escalated: true,
-              escalationApproved: false,
-              totalDurationMs: Date.now() - start,
-              errors: ['Quality gates failed and human rejected override'],
-            } satisfies RalphLoopResult;
-          }
-          break;
+          console.log(`[ralph-loop] Escalating to human review — stopping loop for external resolution`);
+          // This SDK version does not support typed waitpoints. Return immediately with
+          // escalated=true; the EE Design backend handles the human review workflow
+          // and can trigger a new Ralph Loop run with adjusted parameters if approved.
+          return {
+            success: false,
+            totalIterations: maxIterations,
+            finalIteration: iteration,
+            decisions,
+            qualityGates: finalQualityGates,
+            escalated: true,
+            escalationApproved: false,
+            totalDurationMs: Date.now() - start,
+            errors: [`Quality gates failed on iteration ${iteration}: ${failedGates.map((g) => g.name).join(', ')}`],
+          } satisfies RalphLoopResult;
       }
     }
 
