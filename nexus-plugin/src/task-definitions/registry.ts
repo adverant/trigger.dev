@@ -265,6 +265,68 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
     retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 30000, factor: 2 },
   },
 
+  // ── EE Design Partner (10) ──────────────────────────────────────────
+  {
+    taskIdentifier: 'ee-design/resolve-symbols',
+    description: 'Fetch and resolve KiCad symbols from libraries for schematic generation',
+    nexusService: 'ee-design',
+    retryConfig: { maxAttempts: 3, minTimeoutInMs: 2000, maxTimeoutInMs: 30000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'ee-design/generate-connections',
+    description: 'LLM-generated net connections between schematic components (2-10 min)',
+    nexusService: 'ee-design',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 600000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'ee-design/optimize-layout',
+    description: 'Graph centrality + AABB collision detection for IC placement optimization',
+    nexusService: 'ee-design',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 2000, maxTimeoutInMs: 120000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'ee-design/route-wires',
+    description: 'Wire routing between components with power label generation',
+    nexusService: 'ee-design',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 2000, maxTimeoutInMs: 60000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'ee-design/assemble-schematic',
+    description: 'Assemble final KiCad .kicad_sch file from pipeline artifacts',
+    nexusService: 'ee-design',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 1000, maxTimeoutInMs: 30000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'ee-design/smoke-test',
+    description: 'Electrical rule check — power disconnection, short circuits, missing connections',
+    nexusService: 'ee-design',
+    retryConfig: { maxAttempts: 1 },
+  },
+  {
+    taskIdentifier: 'ee-design/visual-validate',
+    description: 'AI visual quality assessment of rendered schematic image',
+    nexusService: 'ee-design',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 120000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'ee-design/export-artifacts',
+    description: 'Export BOM, netlist, and schematic archive files',
+    nexusService: 'ee-design',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 1000, maxTimeoutInMs: 30000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'ee-design/mapo-pipeline',
+    description: 'Full MAPO pipeline (8 phases) as a single orchestrated run',
+    nexusService: 'ee-design',
+    retryConfig: { maxAttempts: 1 },
+  },
+  {
+    taskIdentifier: 'ee-design/ralph-loop',
+    description: 'Continuous iteration loop with quality gate evaluation and escalation',
+    nexusService: 'ee-design',
+    retryConfig: { maxAttempts: 1 },
+  },
+
   // ── Sandbox (4) ─────────────────────────────────────────────────────
   {
     taskIdentifier: 'sandbox-code-execution',
