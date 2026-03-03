@@ -102,7 +102,7 @@ export class SandboxClient {
   private client: AxiosInstance;
 
   constructor(organizationId: string) {
-    const baseURL = process.env.SANDBOX_URL || "http://nexus-sandbox:9080";
+    const baseURL = process.env.SANDBOX_URL || "http://nexus-sandbox:9092";
 
     this.client = axios.create({
       baseURL,
@@ -210,10 +210,12 @@ export class SandboxClient {
   async healthCheck(): Promise<HealthCheckResponse> {
     const start = Date.now();
     try {
-      const response = await this.client.get("/health");
+      const response = await this.client.get("/api/health");
       const latency = Date.now() - start;
       return {
-        status: response.data?.status === "ok" ? "healthy" : "degraded",
+        status: ["ok", "healthy"].includes(response.data?.status)
+          ? "healthy"
+          : "degraded",
         latency,
       };
     } catch (error) {

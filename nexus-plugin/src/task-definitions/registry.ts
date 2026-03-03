@@ -2,7 +2,7 @@
  * Static task definition registry.
  *
  * Since `trigger-dev-webapp` is not deployed, the "Sync Tasks" flow has
- * nothing to pull from.  Instead we seed all 40 Nexus task definitions
+ * nothing to pull from.  Instead we seed all 50 Nexus task definitions
  * directly into the DB on startup so the Tasks page is immediately populated.
  */
 
@@ -22,7 +22,7 @@ export interface TaskRegistryEntry {
 }
 
 /**
- * All 40 Nexus task definitions organised by service.
+ * All 50 Nexus task definitions organised by service.
  */
 export const TASK_REGISTRY: TaskRegistryEntry[] = [
   // ── GraphRAG (4) ────────────────────────────────────────────────────
@@ -325,6 +325,68 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
     description: 'Continuous iteration loop with quality gate evaluation and escalation',
     nexusService: 'ee-design',
     retryConfig: { maxAttempts: 1 },
+  },
+
+  // ── ProseCreator (10) ───────────────────────────────────────────────
+  {
+    taskIdentifier: 'prosecreator-generate-blueprint',
+    description: 'Generate a living blueprint from an outline using LLM analysis',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 3, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-generate-chapters',
+    description: 'Generate manuscript chapters from a blueprint with quality gates',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 300000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-character-analysis',
+    description: 'Deep character development analysis with voice fingerprinting',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 3, minTimeoutInMs: 2000, maxTimeoutInMs: 120000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-continuity-audit',
+    description: 'Cross-chapter continuity checking for traits, locations, and timeline',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 3, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-cnes-audit',
+    description: 'Full CNES narrative, emotional, and structural audit with LLM scoring',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 300000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-quality-assessment',
+    description: 'Manuscript quality scoring across plot, character, writing, and market readiness',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 3, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-ai-detection-scan',
+    description: 'Scan writing for AI-generated content patterns',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 3, minTimeoutInMs: 2000, maxTimeoutInMs: 120000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-export-pipeline',
+    description: 'Multi-format export pipeline (DOCX, EPUB, PDF)',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 120000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-series-intelligence-sync',
+    description: 'Cross-book series consistency analysis for character arcs and lore',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 300000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-deep-insight-generation',
+    description: 'Semantic-level writing insights including pacing, voice drift, and thematic analysis',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 3, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
   },
 
   // ── Sandbox (4) ─────────────────────────────────────────────────────
