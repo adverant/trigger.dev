@@ -10,7 +10,8 @@ export type ServiceName =
   | 'cvat'
   | 'gpu-bridge'
   | 'sandbox'
-  | 'n8n';
+  | 'n8n'
+  | 'skills-engine';
 
 export type HealthStatus = 'healthy' | 'degraded' | 'unhealthy' | 'unknown';
 

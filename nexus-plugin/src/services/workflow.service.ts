@@ -18,6 +18,7 @@ import { WS_EVENTS } from '../websocket/events';
 import { emitToOrg } from '../websocket/socket-server';
 import { createLogger } from '../utils/logger';
 import { NotFoundError, ValidationError } from '../utils/errors';
+import type { WorkflowExecutor } from './workflow-executor';
 
 const logger = createLogger({ component: 'workflow-service' });
 
@@ -36,10 +37,15 @@ function generateJobId(): string {
 }
 
 export class WorkflowService {
+  private executor?: WorkflowExecutor;
+
   constructor(
     private workflowRepo: WorkflowRepository,
-    private io: SocketIOServer
-  ) {}
+    private io: SocketIOServer,
+    executor?: WorkflowExecutor
+  ) {
+    this.executor = executor;
+  }
 
   // ── Workflow CRUD ──────────────────────────────────────────────────
 
@@ -170,8 +176,22 @@ export class WorkflowService {
       name: workflow.name,
     });
 
-    // TODO: Phase 3 — dispatch workflow execution engine here
-    // For now, the run is created in 'queued' status
+    // Dispatch execution asynchronously (fire-and-forget from HTTP perspective)
+    if (this.executor) {
+      this.executor.execute(run).catch(err => {
+        logger.error('Workflow execution failed', {
+          runId,
+          workflowId,
+          error: err.message,
+          stack: err.stack,
+        });
+      });
+    } else {
+      logger.warn('No workflow executor configured — run will remain in queued status', {
+        runId,
+        workflowId,
+      });
+    }
 
     return run;
   }

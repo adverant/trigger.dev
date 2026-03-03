@@ -90,7 +90,7 @@ export function createWorkflowRouter(
   router.get(
     '/',
     asyncHandler(async (req: Request, res: Response) => {
-      const orgId = (req as any).organizationId;
+      const orgId = req.user!.organizationId;
       const { status, search, tags, isTemplate, limit, offset } = req.query;
 
       const result = await workflowService.listWorkflows(orgId, {
@@ -120,8 +120,8 @@ export function createWorkflowRouter(
         return;
       }
 
-      const orgId = (req as any).organizationId;
-      const userId = (req as any).userId;
+      const orgId = req.user!.organizationId;
+      const userId = req.user!.userId;
 
       const workflow = await workflowService.createWorkflow(orgId, userId, value);
       res.status(201).json({ success: true, data: toUI(workflow) });
@@ -174,7 +174,7 @@ export function createWorkflowRouter(
   router.post(
     '/:id/duplicate',
     asyncHandler(async (req: Request, res: Response) => {
-      const userId = (req as any).userId;
+      const userId = req.user!.userId;
       const { name } = req.body;
       const workflow = await workflowService.duplicateWorkflow(req.params.id, userId, name);
       res.json({ success: true, data: toUI(workflow) });
@@ -191,8 +191,8 @@ export function createWorkflowRouter(
         return;
       }
 
-      const orgId = (req as any).organizationId;
-      const userId = (req as any).userId;
+      const orgId = req.user!.organizationId;
+      const userId = req.user!.userId;
 
       const run = await workflowService.startRun(
         req.params.id,
@@ -266,7 +266,7 @@ export function createJobRouter(workflowService: WorkflowService): Router {
   router.post(
     '/:nxjId/cancel',
     asyncHandler(async (req: Request, res: Response) => {
-      const orgId = (req as any).organizationId;
+      const orgId = req.user!.organizationId;
       const run = await workflowService.cancelRun(req.params.nxjId, orgId);
       res.json({ success: true, data: runToUI(run) });
     })

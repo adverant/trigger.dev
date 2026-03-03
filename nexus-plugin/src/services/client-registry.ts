@@ -41,11 +41,13 @@ export function buildClientRegistry(
     'gpu-bridge': 'GPU_BRIDGE_URL',
     sandbox: 'SANDBOX_URL',
     n8n: 'N8N_URL',
+    'skills-engine': 'SKILLS_ENGINE_URL',
   };
 
   // Ensure env vars are populated from config before constructing clients
   for (const [service, envVar] of Object.entries(envMapping)) {
-    const configKey = service === 'gpu-bridge' ? 'gpuBridge' : service;
+    const configKeyMap: Record<string, string> = { 'gpu-bridge': 'gpuBridge', 'skills-engine': 'skillsEngine' };
+    const configKey = configKeyMap[service] || service;
     const url = (serviceUrls as any)[configKey] || '';
     if (url && !process.env[envVar]) {
       process.env[envVar] = url;
@@ -94,10 +96,15 @@ export function buildClientRegistry(
       const { N8NClient } = require('../integrations/n8n.client');
       return new N8NClient(organizationId);
     },
+    'skills-engine': () => {
+      const { SkillsEngineClient } = require('../integrations/skills-engine.client');
+      return new SkillsEngineClient(organizationId);
+    },
   };
 
   for (const [service, factory] of Object.entries(clientFactories)) {
-    const configKey = service === 'gpu-bridge' ? 'gpuBridge' : service;
+    const configKeyMap: Record<string, string> = { 'gpu-bridge': 'gpuBridge', 'skills-engine': 'skillsEngine' };
+    const configKey = configKeyMap[service] || service;
     const url = (serviceUrls as any)[configKey] || '';
 
     // Skip services with no URL configured (not deployed)

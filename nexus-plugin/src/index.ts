@@ -49,6 +49,7 @@ import { DeploymentService } from './services/deployment.service';
 import { QueueService } from './services/queue.service';
 import { SyncService } from './services/sync.service';
 import { WorkflowService } from './services/workflow.service';
+import { WorkflowExecutor } from './services/workflow-executor';
 
 // Import repositories
 import { ProjectRepository } from './database/repositories/project.repository';
@@ -192,7 +193,13 @@ class NexusTriggerServer {
       const deploymentService = new DeploymentService(triggerProxy, this.db);
       const queueService = new QueueService(triggerProxy, this.io);
       const workflowRepo = new WorkflowRepository(this.db);
-      const workflowService = new WorkflowService(workflowRepo, this.io);
+      const workflowExecutor = new WorkflowExecutor(
+        workflowRepo,
+        triggerProxy,
+        this.clientRegistry,
+        this.io
+      );
+      const workflowService = new WorkflowService(workflowRepo, this.io, workflowExecutor);
       this.syncService = new SyncService(triggerProxy, runRepo, scheduleRepo);
 
       // Setup middleware
@@ -473,6 +480,7 @@ class NexusTriggerServer {
       { dbName: 'gpu-bridge', configKey: 'gpuBridge', deployed: false },
       { dbName: 'sandbox', configKey: 'sandbox', deployed: false },
       { dbName: 'n8n', configKey: 'n8n', deployed: true },
+      { dbName: 'skills-engine', configKey: 'skillsEngine', deployed: true },
     ];
 
     // Use a system org ID for seeding — real orgs get their rows when they first access

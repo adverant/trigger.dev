@@ -41,6 +41,7 @@ export interface NexusConfig {
     gpuBridge: string;
     sandbox: string;
     n8n: string;
+    skillsEngine: string;
   };
 }
 
@@ -128,6 +129,7 @@ export function loadConfig(): AppConfig {
       gpuBridge: optionalEnv('GPU_BRIDGE_URL', ''),
       sandbox: optionalEnv('SANDBOX_URL', ''),
       n8n: optionalEnv('N8N_URL', 'http://n8n-63b9f471:80'),
+      skillsEngine: optionalEnv('SKILLS_ENGINE_URL', 'http://nexus-skills-engine:8095'),
     },
   };
 
