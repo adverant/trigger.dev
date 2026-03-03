@@ -40,6 +40,14 @@ export const WS_EVENTS = {
   QUEUE_PAUSED: 'queue.paused',
   QUEUE_RESUMED: 'queue.resumed',
 
+  // Workflow events
+  WORKFLOW_CREATED: 'workflow.created',
+  WORKFLOW_RUN_STARTED: 'workflow_run.started',
+  WORKFLOW_RUN_PROGRESS: 'workflow_run.progress',
+  WORKFLOW_RUN_COMPLETED: 'workflow_run.completed',
+  WORKFLOW_RUN_FAILED: 'workflow_run.failed',
+  WORKFLOW_RUN_CANCELLED: 'workflow_run.cancelled',
+
   // Connection lifecycle
   JOIN: 'join',
   LEAVE: 'leave',

@@ -25,6 +25,8 @@ import { createDeploymentRouter } from './deployments';
 import { createQueueRouter } from './queues';
 import { createIntegrationRouter } from './integrations';
 import { createSettingsRouter } from './settings';
+import { createWorkflowRouter, createJobRouter } from './workflows';
+import { WorkflowService } from '../services/workflow.service';
 
 export interface RouterDependencies {
   authClient: NexusAuthClient;
@@ -42,6 +44,7 @@ export interface RouterDependencies {
   projectRepo: ProjectRepository;
   db: DatabaseService;
   nexusConfig: NexusConfig;
+  workflowService?: WorkflowService;
 }
 
 export function createApiRouter(deps: RouterDependencies): Router {
@@ -66,6 +69,12 @@ export function createApiRouter(deps: RouterDependencies): Router {
     createIntegrationRouter(deps.integrationConfigRepo, deps.nexusConfig, deps.io)
   );
   router.use('/settings', createSettingsRouter(deps.db));
+
+  // Workflow CRUD and universal job API
+  if (deps.workflowService) {
+    router.use('/workflows', createWorkflowRouter(deps.workflowService, deps.io));
+    router.use('/jobs', createJobRouter(deps.workflowService));
+  }
 
   return router;
 }

@@ -36,6 +36,7 @@ import { createDeploymentRouter } from './api/deployments';
 import { createQueueRouter } from './api/queues';
 import { createIntegrationRouter } from './api/integrations';
 import { createSettingsRouter } from './api/settings';
+import { createWorkflowRouter, createJobRouter } from './api/workflows';
 
 // Import services
 import { TriggerProxyService } from './services/trigger-proxy.service';
@@ -47,6 +48,7 @@ import { WaitpointService } from './services/waitpoint.service';
 import { DeploymentService } from './services/deployment.service';
 import { QueueService } from './services/queue.service';
 import { SyncService } from './services/sync.service';
+import { WorkflowService } from './services/workflow.service';
 
 // Import repositories
 import { ProjectRepository } from './database/repositories/project.repository';
@@ -58,6 +60,7 @@ import { WebhookRepository } from './database/repositories/webhook.repository';
 import { UsageRepository } from './database/repositories/usage.repository';
 import { TaskDefinitionRepository } from './database/repositories/task-definition.repository';
 import { TaskTemplateRepository } from './database/repositories/task-template.repository';
+import { WorkflowRepository } from './database/repositories/workflow.repository';
 
 // Import Trigger.dev client factory
 import { createTriggerClients } from './config/trigger-client';
@@ -188,6 +191,8 @@ class NexusTriggerServer {
       const waitpointService = new WaitpointService(triggerProxy, waitpointRepo, usageRepo, this.io);
       const deploymentService = new DeploymentService(triggerProxy, this.db);
       const queueService = new QueueService(triggerProxy, this.io);
+      const workflowRepo = new WorkflowRepository(this.db);
+      const workflowService = new WorkflowService(workflowRepo, this.io);
       this.syncService = new SyncService(triggerProxy, runRepo, scheduleRepo);
 
       // Setup middleware
@@ -212,7 +217,8 @@ class NexusTriggerServer {
         integrationConfigRepo,
         taskTemplateRepo,
         this.clientRegistry,
-        projectRepo
+        projectRepo,
+        workflowService
       );
 
       // Serve UI static files
@@ -413,7 +419,8 @@ class NexusTriggerServer {
     integrationConfigRepo: IntegrationConfigRepository,
     taskTemplateRepo: TaskTemplateRepository,
     clientRegistry: ServiceClientRegistry,
-    projectRepo: ProjectRepository
+    projectRepo: ProjectRepository,
+    workflowService: WorkflowService
   ): void {
     const apiRouter = express.Router();
 
@@ -437,6 +444,8 @@ class NexusTriggerServer {
     apiRouter.use('/queues', createQueueRouter(queueService, this.io));
     apiRouter.use('/integrations', createIntegrationRouter(integrationConfigRepo, this.config.nexus, this.io, taskTemplateRepo, clientRegistry));
     apiRouter.use('/settings', createSettingsRouter(this.db));
+    apiRouter.use('/workflows', createWorkflowRouter(workflowService, this.io));
+    apiRouter.use('/jobs', createJobRouter(workflowService));
 
     this.app.use('/trigger/api/v1', apiRouter);
 
