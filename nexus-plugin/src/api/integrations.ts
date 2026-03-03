@@ -60,6 +60,7 @@ const VALID_SERVICES: ServiceName[] = [
   'gpu-bridge',
   'sandbox',
   'n8n',
+  'skills-engine',
 ];
 
 const updateIntegrationSchema = Joi.object({
@@ -136,6 +137,64 @@ export function createIntegrationRouter(
         success: true,
         data: summary,
       });
+    })
+  );
+
+  // GET /skills-engine/skills - List available skills from Skills Engine
+  router.get(
+    '/skills-engine/skills',
+    asyncHandler(async (req: Request, res: Response) => {
+      const client = clientRegistry?.get('skills-engine' as ServiceName);
+      if (!client) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+
+      try {
+        const { SkillsEngineClient } = require('../integrations/skills-engine.client');
+        if (!(client instanceof SkillsEngineClient)) {
+          res.json({ success: true, data: [] });
+          return;
+        }
+
+        const { search, category, limit } = req.query;
+        const result = await (client as any).listSkills({
+          search: search as string | undefined,
+          category: category as string | undefined,
+          limit: limit ? Number(limit) : 50,
+        });
+
+        res.json({ success: true, data: result.skills || [] });
+      } catch (err: any) {
+        logger.warn('Failed to list skills from Skills Engine', { error: err.message });
+        res.json({ success: true, data: [] });
+      }
+    })
+  );
+
+  // GET /n8n/workflows - List available n8n workflows
+  router.get(
+    '/n8n/workflows',
+    asyncHandler(async (req: Request, res: Response) => {
+      const client = clientRegistry?.get('n8n' as ServiceName);
+      if (!client) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+
+      try {
+        const { N8NClient } = require('../integrations/n8n.client');
+        if (!(client instanceof N8NClient)) {
+          res.json({ success: true, data: [] });
+          return;
+        }
+
+        const result = await (client as any).listWorkflows();
+        res.json({ success: true, data: result.workflows || [] });
+      } catch (err: any) {
+        logger.warn('Failed to list n8n workflows', { error: err.message });
+        res.json({ success: true, data: [] });
+      }
     })
   );
 

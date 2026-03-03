@@ -155,6 +155,11 @@ export class WorkflowService {
   ): Promise<WorkflowRun> {
     const workflow = await this.getWorkflow(workflowId);
 
+    const def = workflow.definition;
+    if (!def?.nodes || def.nodes.length === 0) {
+      throw new Error('Workflow has no nodes to execute');
+    }
+
     const runId = generateJobId();
 
     const run = await this.workflowRepo.createRun({
