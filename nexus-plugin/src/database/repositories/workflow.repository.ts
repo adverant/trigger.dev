@@ -366,6 +366,22 @@ export class WorkflowRepository {
     return rows.map(rowToWorkflowRun);
   }
 
+  async findRunsByStatuses(
+    statuses: string[],
+    maxAgeMinutes?: number
+  ): Promise<WorkflowRun[]> {
+    let query = `SELECT * FROM trigger.workflow_runs WHERE status = ANY($1)`;
+    const params: any[] = [statuses];
+
+    if (maxAgeMinutes) {
+      query += ` AND created_at < NOW() - INTERVAL '${maxAgeMinutes} minutes'`;
+    }
+
+    query += ` ORDER BY created_at ASC`;
+    const rows = await this.db.queryMany<any>(query, params);
+    return rows.map(rowToWorkflowRun);
+  }
+
   async updateRunStatus(
     runId: string,
     status: string,

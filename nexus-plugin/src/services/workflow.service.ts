@@ -215,6 +215,45 @@ export class WorkflowService {
     return this.workflowRepo.findRunsByWorkflow(workflowId, limit, offset);
   }
 
+  /**
+   * Recover stale runs left in running/queued state (e.g. after pod restart).
+   * Marks them as failed with an explanatory error message.
+   */
+  async recoverStaleRuns(maxAgeMinutes = 30): Promise<number> {
+    const staleRuns = await this.workflowRepo.findRunsByStatuses(
+      ['running', 'queued'],
+      maxAgeMinutes
+    );
+
+    if (staleRuns.length === 0) return 0;
+
+    let recovered = 0;
+    for (const run of staleRuns) {
+      try {
+        await this.workflowRepo.updateRunStatus(run.runId, 'failed', {
+          errorMessage: 'Pod restarted — execution interrupted. Re-run this workflow to retry.',
+          completedAt: new Date(),
+          durationMs: run.startedAt
+            ? Date.now() - new Date(run.startedAt).getTime()
+            : 0,
+        });
+        recovered++;
+        logger.warn('Recovered stale run', {
+          runId: run.runId,
+          workflowId: run.workflowId,
+          previousStatus: run.status,
+        });
+      } catch (err: any) {
+        logger.error('Failed to recover stale run', {
+          runId: run.runId,
+          error: err.message,
+        });
+      }
+    }
+
+    return recovered;
+  }
+
   async cancelRun(runId: string, orgId: string): Promise<WorkflowRun> {
     const run = await this.getRun(runId);
     if (!['queued', 'running', 'paused', 'waiting_approval'].includes(run.status)) {

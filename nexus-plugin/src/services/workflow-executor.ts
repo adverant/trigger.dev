@@ -6,9 +6,9 @@
  * Trigger.dev tasks, Skills Engine, MageAgent, n8n, and local logic nodes.
  *
  * Execution model:
- * - Topological sort determines execution order
- * - Nodes execute sequentially within dependency chains
- * - Independent branches can be identified for future parallelism
+ * - Topological sort by level groups independent nodes
+ * - Nodes at the same level execute in parallel (Promise.allSettled)
+ * - Dependency chains execute sequentially across levels
  * - Conditional nodes route to true/false branches, skipping the other
  * - Progress updates emitted via WebSocket in real-time
  *
@@ -33,20 +33,20 @@ import type { SkillsEngineClient } from '../integrations/skills-engine.client';
 
 const logger = createLogger({ component: 'workflow-executor' });
 
-// Maximum time to wait for an individual node to complete (5 minutes)
-const NODE_TIMEOUT_MS = 5 * 60 * 1000;
+// Default max time per node (5 minutes). Overridden by node.data.timeoutMs.
+const DEFAULT_NODE_TIMEOUT_MS = 5 * 60 * 1000;
 // Maximum time to poll for async task completion
 const POLL_INTERVAL_MS = 2000;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-interface GraphNode {
+export interface GraphNode {
   id: string;
   type: string;
   data: Record<string, any>;
 }
 
-interface GraphEdge {
+export interface GraphEdge {
   id: string;
   source: string;
   target: string;
@@ -54,7 +54,7 @@ interface GraphEdge {
   targetHandle?: string;
 }
 
-interface NodeState {
+export interface NodeState {
   status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
   output?: unknown;
   error?: string;
@@ -111,52 +111,54 @@ export class WorkflowExecutor {
       // Build graph structures
       const adjacency = buildAdjacencyList(nodes, edges);
       const inDegree = buildInDegreeMap(nodes, edges);
-      const executionOrder = topologicalSort(nodes, inDegree, adjacency);
       const reverseAdjacency = buildReverseAdjacency(nodes, edges);
+
+      // Group nodes into levels for parallel execution
+      const levels = topologicalSortByLevel(nodes, inDegree, adjacency);
 
       // Track which nodes are skipped (from conditional false branches)
       const skippedNodes = new Set<string>();
 
-      // Execute nodes in topological order
-      for (let i = 0; i < executionOrder.length; i++) {
-        const nodeId = executionOrder[i];
-        const node = nodes.find((n) => n.id === nodeId);
+      // Execute level by level — nodes within a level run in parallel
+      for (const level of levels) {
+        // Filter out skipped or cascade-failed nodes
+        const runnableNodes: { nodeId: string; node: GraphNode }[] = [];
 
-        if (!node) continue;
+        for (const nodeId of level) {
+          const node = nodes.find((n) => n.id === nodeId);
+          if (!node) continue;
 
-        // Skip if this node was marked for skipping (conditional false branch)
-        if (skippedNodes.has(nodeId)) {
-          nodeStates[nodeId] = { status: 'skipped' };
-          continue;
+          if (skippedNodes.has(nodeId)) {
+            nodeStates[nodeId] = { status: 'skipped' };
+            continue;
+          }
+
+          const deps = reverseAdjacency.get(nodeId) ?? [];
+          const hasFailedDep = deps.some(
+            (depId) => nodeStates[depId]?.status === 'failed'
+          );
+          if (hasFailedDep) {
+            nodeStates[nodeId] = { status: 'skipped', error: 'Upstream node failed' };
+            markDependentsSkipped(nodeId, adjacency, skippedNodes);
+            continue;
+          }
+
+          runnableNodes.push({ nodeId, node });
         }
 
-        // Skip if any dependency failed (cascade skip)
-        const deps = reverseAdjacency.get(nodeId) ?? [];
-        const hasFailedDep = deps.some(
-          (depId) => nodeStates[depId]?.status === 'failed'
-        );
-        if (hasFailedDep) {
-          nodeStates[nodeId] = {
-            status: 'skipped',
-            error: 'Upstream node failed',
-          };
-          markDependentsSkipped(nodeId, adjacency, skippedNodes);
-          continue;
+        if (runnableNodes.length === 0) continue;
+
+        // Mark all nodes in this level as running
+        for (const { nodeId } of runnableNodes) {
+          nodeStates[nodeId] = { status: 'running', startedAt: new Date().toISOString() };
         }
 
-        // Gather input from connected upstream nodes
-        const inputData = gatherInput(nodeId, reverseAdjacency, nodeStates, edges);
-
-        // Execute the node
-        nodeStates[nodeId] = { status: 'running', startedAt: new Date().toISOString() };
-
-        // Calculate progress
+        // Emit progress for level start
         const completedCount = Object.values(nodeStates).filter(
           (s) => s.status === 'completed' || s.status === 'skipped'
         ).length;
         const progress = Math.round((completedCount / nodes.length) * 100);
 
-        // Update DB + emit progress
         await this.workflowRepo.updateRunStatus(runId, 'running', {
           nodeStates,
           progress,
@@ -166,63 +168,80 @@ export class WorkflowExecutor {
           runId,
           workflowId,
           progress,
-          currentNode: nodeId,
           nodeStates,
         });
 
-        try {
-          const result = await this.executeNode(node, inputData, run);
+        // Execute all nodes in this level in parallel
+        const results = await Promise.allSettled(
+          runnableNodes.map(async ({ nodeId, node }) => {
+            const inputData = gatherInput(nodeId, reverseAdjacency, nodeStates, edges);
+            const timeoutMs = (node.data.timeoutMs as number) || DEFAULT_NODE_TIMEOUT_MS;
 
-          const endTime = new Date().toISOString();
-          const duration = Date.now() - new Date(nodeStates[nodeId].startedAt!).getTime();
+            const result = await Promise.race([
+              this.executeNode(node, inputData, run),
+              sleep(timeoutMs).then(() => {
+                throw new Error(`Node timed out after ${timeoutMs}ms`);
+              }),
+            ]);
 
-          // Handle conditional node — determine which branch to skip
-          if (node.type === 'conditionalNode' && result !== undefined) {
-            const condResult = result as { branch: 'true' | 'false'; data: unknown };
-            nodeStates[nodeId] = {
-              status: 'completed',
-              output: condResult,
-              completedAt: endTime,
-              durationMs: duration,
-            };
+            return { nodeId, node, result };
+          })
+        );
 
-            // Find outgoing edges from true/false handles
-            const outEdges = edges.filter((e) => e.source === nodeId);
-            for (const edge of outEdges) {
-              const handle = edge.sourceHandle ?? '';
-              // Skip nodes connected to the branch NOT taken
-              if (condResult.branch === 'true' && handle === 'false') {
-                markSubgraphSkipped(edge.target, adjacency, skippedNodes, edges, nodeId);
-              } else if (condResult.branch === 'false' && handle === 'true') {
-                markSubgraphSkipped(edge.target, adjacency, skippedNodes, edges, nodeId);
+        // Process results after all nodes in this level complete
+        for (const settled of results) {
+          if (settled.status === 'fulfilled') {
+            const { nodeId, node, result } = settled.value;
+            const endTime = new Date().toISOString();
+            const duration = Date.now() - new Date(nodeStates[nodeId].startedAt!).getTime();
+
+            // Handle conditional node — determine which branch to skip
+            if (node.type === 'conditionalNode' && result !== undefined) {
+              const condResult = result as { branch: 'true' | 'false'; data: unknown };
+              nodeStates[nodeId] = {
+                status: 'completed',
+                output: condResult,
+                completedAt: endTime,
+                durationMs: duration,
+              };
+
+              const outEdges = edges.filter((e) => e.source === nodeId);
+              for (const edge of outEdges) {
+                const handle = edge.sourceHandle ?? '';
+                if (condResult.branch === 'true' && handle === 'false') {
+                  markSubgraphSkipped(edge.target, adjacency, skippedNodes, edges, nodeId);
+                } else if (condResult.branch === 'false' && handle === 'true') {
+                  markSubgraphSkipped(edge.target, adjacency, skippedNodes, edges, nodeId);
+                }
               }
+            } else {
+              nodeStates[nodeId] = {
+                status: 'completed',
+                output: result,
+                completedAt: endTime,
+                durationMs: duration,
+                jobId: (result as any)?.jobId,
+                jobType: (result as any)?.jobType,
+              };
             }
+
+            await this.trackJobIds(runId, node.type, result);
           } else {
+            // Find the corresponding node for this failed promise
+            const idx = results.indexOf(settled);
+            const { nodeId, node } = runnableNodes[idx];
+            const errMsg = settled.reason instanceof Error ? settled.reason.message : String(settled.reason);
+
             nodeStates[nodeId] = {
-              status: 'completed',
-              output: result,
-              completedAt: endTime,
-              durationMs: duration,
-              jobId: (result as any)?.jobId,
-              jobType: (result as any)?.jobType,
+              status: 'failed',
+              error: errMsg,
+              completedAt: new Date().toISOString(),
+              durationMs: Date.now() - new Date(nodeStates[nodeId].startedAt!).getTime(),
             };
+
+            logger.error('Node execution failed', { runId, nodeId, nodeType: node.type, error: errMsg });
+            markDependentsSkipped(nodeId, adjacency, skippedNodes);
           }
-
-          // Track external job IDs
-          await this.trackJobIds(runId, node.type, result);
-        } catch (err: unknown) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          nodeStates[nodeId] = {
-            status: 'failed',
-            error: errMsg,
-            completedAt: new Date().toISOString(),
-            durationMs: Date.now() - new Date(nodeStates[nodeId].startedAt!).getTime(),
-          };
-
-          logger.error('Node execution failed', { runId, nodeId, nodeType: node.type, error: errMsg });
-
-          // Mark dependents as skipped
-          markDependentsSkipped(nodeId, adjacency, skippedNodes);
         }
       }
 
@@ -356,7 +375,7 @@ export class WorkflowExecutor {
   }
 
   private async pollTriggerRun(triggerRunId: string): Promise<unknown> {
-    const deadline = Date.now() + NODE_TIMEOUT_MS;
+    const deadline = Date.now() + DEFAULT_NODE_TIMEOUT_MS;
 
     while (Date.now() < deadline) {
       try {
@@ -390,7 +409,7 @@ export class WorkflowExecutor {
       }
     }
 
-    throw new Error(`TaskNode timed out after ${NODE_TIMEOUT_MS}ms waiting for run ${triggerRunId}`);
+    throw new Error(`TaskNode timed out after ${DEFAULT_NODE_TIMEOUT_MS}ms waiting for run ${triggerRunId}`);
   }
 
   // ── Skill Node (Skills Engine) ───────────────────────────────────────
@@ -643,17 +662,17 @@ function buildInDegreeMap(
 }
 
 /**
- * Kahn's algorithm for topological sort.
- * Returns node IDs in valid execution order.
+ * Kahn's algorithm — returns nodes grouped by execution level.
+ * Nodes at the same level have all dependencies resolved and can run in parallel.
  */
-function topologicalSort(
+function topologicalSortByLevel(
   nodes: GraphNode[],
   inDegree: Map<string, number>,
   adjacency: Map<string, string[]>
-): string[] {
+): string[][] {
   const deg = new Map(inDegree);
-  const queue: string[] = [];
-  const result: string[] = [];
+  const levels: string[][] = [];
+  let queue: string[] = [];
 
   // Start with nodes that have no dependencies
   for (const node of nodes) {
@@ -662,30 +681,39 @@ function topologicalSort(
     }
   }
 
-  while (queue.length > 0) {
-    const nodeId = queue.shift()!;
-    result.push(nodeId);
+  let processed = 0;
 
-    for (const neighbor of adjacency.get(nodeId) ?? []) {
-      const newDeg = (deg.get(neighbor) ?? 1) - 1;
-      deg.set(neighbor, newDeg);
-      if (newDeg === 0) {
-        queue.push(neighbor);
+  while (queue.length > 0) {
+    levels.push([...queue]);
+    processed += queue.length;
+    const nextQueue: string[] = [];
+
+    for (const nodeId of queue) {
+      for (const neighbor of adjacency.get(nodeId) ?? []) {
+        const newDeg = (deg.get(neighbor) ?? 1) - 1;
+        deg.set(neighbor, newDeg);
+        if (newDeg === 0) {
+          nextQueue.push(neighbor);
+        }
       }
     }
+
+    queue = nextQueue;
   }
 
-  // If not all nodes are in result, there's a cycle
-  if (result.length !== nodes.length) {
-    const missing = nodes.filter((n) => !result.includes(n.id)).map((n) => n.id);
+  // If not all nodes processed, there's a cycle
+  if (processed !== nodes.length) {
+    const processedIds = new Set(levels.flat());
+    const missing = nodes.filter((n) => !processedIds.has(n.id)).map((n) => n.id);
     throw new Error(`Workflow contains a cycle involving nodes: ${missing.join(', ')}`);
   }
 
-  return result;
+  return levels;
 }
 
 /**
  * Gather input data for a node from its upstream connections.
+ * Defensive: handles undefined, null, and primitive outputs safely.
  */
 function gatherInput(
   nodeId: string,
@@ -700,33 +728,35 @@ function gatherInput(
   }
 
   if (upstreamIds.length === 1) {
-    // Single input — flatten
     const state = nodeStates[upstreamIds[0]];
-    if (state?.status === 'completed' && state.output !== undefined) {
-      const output = state.output as any;
-      // Unwrap .output if nested (from our executor result format)
-      if (output && typeof output === 'object' && 'output' in output) {
-        return typeof output.output === 'object' && output.output !== null
-          ? output.output
-          : { value: output.output };
-      }
-      return typeof output === 'object' && output !== null ? output : { value: output };
+    if (!state || state.status !== 'completed' || state.output === undefined || state.output === null) {
+      return {};
     }
-    return {};
+    const output = state.output as any;
+    // Unwrap .output if nested (from our executor result format)
+    if (output && typeof output === 'object' && 'output' in output) {
+      const inner = output.output;
+      if (inner === null || inner === undefined) return {};
+      return typeof inner === 'object' ? inner : { value: inner };
+    }
+    return typeof output === 'object' ? output : { value: output };
   }
 
-  // Multiple inputs — merge by upstream node ID
+  // Multiple inputs — merge by edge handle or upstream node ID
   const merged: Record<string, unknown> = {};
   for (const upId of upstreamIds) {
     const state = nodeStates[upId];
-    if (state?.status === 'completed' && state.output !== undefined) {
-      const output = state.output as any;
-      // Find the edge connecting upId → nodeId for labeling
-      const edge = edges.find((e) => e.source === upId && e.target === nodeId);
-      const key = edge?.sourceHandle || upId;
-      merged[key] = output && typeof output === 'object' && 'output' in output
-        ? output.output
-        : output;
+    if (!state || state.status !== 'completed' || state.output === undefined || state.output === null) {
+      continue;
+    }
+    const output = state.output as any;
+    const edge = edges.find((e) => e.source === upId && e.target === nodeId);
+    const key = edge?.sourceHandle || upId;
+    if (output && typeof output === 'object' && 'output' in output) {
+      const inner = output.output;
+      merged[key] = inner === null || inner === undefined ? {} : inner;
+    } else {
+      merged[key] = output;
     }
   }
   return merged;
@@ -781,3 +811,6 @@ function markSubgraphSkipped(
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// Exported for unit testing (pure functions)
+export { topologicalSortByLevel, gatherInput, findTerminalNodes, markDependentsSkipped };

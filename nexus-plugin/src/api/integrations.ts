@@ -146,14 +146,14 @@ export function createIntegrationRouter(
     asyncHandler(async (req: Request, res: Response) => {
       const client = clientRegistry?.get('skills-engine' as ServiceName);
       if (!client) {
-        res.json({ success: true, data: [] });
+        res.json({ success: true, data: [], available: false, reason: 'Skills Engine not configured' });
         return;
       }
 
       try {
         const { SkillsEngineClient } = require('../integrations/skills-engine.client');
         if (!(client instanceof SkillsEngineClient)) {
-          res.json({ success: true, data: [] });
+          res.json({ success: true, data: [], available: false, reason: 'Skills Engine client type mismatch' });
           return;
         }
 
@@ -164,10 +164,10 @@ export function createIntegrationRouter(
           limit: limit ? Number(limit) : 50,
         });
 
-        res.json({ success: true, data: result.skills || [] });
+        res.json({ success: true, data: result.skills || [], available: true });
       } catch (err: any) {
         logger.warn('Failed to list skills from Skills Engine', { error: err.message });
-        res.json({ success: true, data: [] });
+        res.json({ success: true, data: [], available: false, reason: `Skills Engine error: ${err.message}` });
       }
     })
   );
@@ -178,22 +178,22 @@ export function createIntegrationRouter(
     asyncHandler(async (req: Request, res: Response) => {
       const client = clientRegistry?.get('n8n' as ServiceName);
       if (!client) {
-        res.json({ success: true, data: [] });
+        res.json({ success: true, data: [], available: false, reason: 'n8n not configured' });
         return;
       }
 
       try {
         const { N8NClient } = require('../integrations/n8n.client');
         if (!(client instanceof N8NClient)) {
-          res.json({ success: true, data: [] });
+          res.json({ success: true, data: [], available: false, reason: 'n8n client type mismatch' });
           return;
         }
 
         const result = await (client as any).listWorkflows();
-        res.json({ success: true, data: result.workflows || [] });
+        res.json({ success: true, data: result.workflows || [], available: true });
       } catch (err: any) {
         logger.warn('Failed to list n8n workflows', { error: err.message });
-        res.json({ success: true, data: [] });
+        res.json({ success: true, data: [], available: false, reason: `n8n error: ${err.message}` });
       }
     })
   );

@@ -252,6 +252,27 @@ class NexusTriggerServer {
       );
       this.healthWorker.start();
 
+      // Recover stale workflow runs from previous pod lifecycle
+      workflowService.recoverStaleRuns().then(count => {
+        if (count > 0) {
+          logger.warn(`Recovered ${count} stale workflow run(s) from previous pod lifecycle`);
+        }
+      }).catch(err => {
+        logger.error('Failed to recover stale runs on startup', { error: err.message });
+      });
+
+      // Periodic sweep for stuck workflow runs (every 60s)
+      setInterval(async () => {
+        try {
+          const count = await workflowService.recoverStaleRuns(30);
+          if (count > 0) {
+            logger.warn(`Periodic sweep recovered ${count} stale workflow run(s)`);
+          }
+        } catch (err: any) {
+          logger.error('Stale run sweep failed', { error: err.message });
+        }
+      }, 60_000);
+
       // Start server
       const port = this.config.plugin.port;
       this.server.listen(port, () => {
