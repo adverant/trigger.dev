@@ -51,16 +51,14 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
-    # nexus-graphrag
+    # nexus-graphrag (port 8090 per configmap GRAPHRAG_URL)
     - to:
         - podSelector:
             matchLabels:
               app: nexus-graphrag
       ports:
         - protocol: TCP
-          port: 9050
-        - protocol: TCP
-          port: 9051
+          port: 8090
     # nexus-mageagent
     - to:
         - podSelector:

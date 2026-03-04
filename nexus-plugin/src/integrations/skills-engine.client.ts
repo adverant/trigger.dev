@@ -1,4 +1,5 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
+import { AxiosInstance, AxiosError } from 'axios';
+import { createResilientClient } from './resilient-client';
 
 // --- Interfaces ---
 
@@ -60,7 +61,8 @@ export class SkillsEngineClient {
       throw new Error('SKILLS_ENGINE_URL environment variable is not set');
     }
 
-    this.client = axios.create({
+    this.client = createResilientClient({
+      serviceName: 'skills-engine',
       baseURL,
       timeout: 60000,
       headers: {

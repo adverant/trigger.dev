@@ -1,4 +1,5 @@
-import axios, { AxiosInstance, AxiosError } from "axios";
+import { AxiosInstance, AxiosError } from "axios";
+import { createResilientClient } from "./resilient-client";
 
 // --- Interfaces ---
 
@@ -109,7 +110,8 @@ export class GPUBridgeClient {
       throw new Error("GPU_BRIDGE_URL environment variable is not set");
     }
 
-    this.client = axios.create({
+    this.client = createResilientClient({
+      serviceName: 'gpu-bridge',
       baseURL,
       timeout: 60000,
       headers: {

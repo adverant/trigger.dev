@@ -1,4 +1,5 @@
-import axios, { AxiosInstance, AxiosError } from "axios";
+import { AxiosInstance, AxiosError } from "axios";
+import { createResilientClient } from "./resilient-client";
 
 // --- Interfaces ---
 
@@ -96,7 +97,8 @@ export class N8NClient {
       headers["X-N8N-API-KEY"] = apiKey;
     }
 
-    this.client = axios.create({
+    this.client = createResilientClient({
+      serviceName: 'n8n',
       baseURL,
       timeout: 30000,
       headers,

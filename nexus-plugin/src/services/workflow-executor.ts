@@ -20,6 +20,7 @@ import {
   WorkflowRepository,
   WorkflowRun,
 } from '../database/repositories/workflow.repository';
+import { RunRepository } from '../database/repositories/run.repository';
 import { TriggerProxyService } from './trigger-proxy.service';
 import { ServiceClientRegistry } from './client-registry';
 import { evaluateCondition, evaluateTransform } from './expression-evaluator';
@@ -35,8 +36,9 @@ const logger = createLogger({ component: 'workflow-executor' });
 
 // Default max time per node (5 minutes). Overridden by node.data.timeoutMs.
 const DEFAULT_NODE_TIMEOUT_MS = 5 * 60 * 1000;
-// Maximum time to poll for async task completion
-const POLL_INTERVAL_MS = 2000;
+// Polling: starts at 2s, doubles each attempt, caps at 30s
+const POLL_INITIAL_INTERVAL_MS = 2000;
+const POLL_MAX_INTERVAL_MS = 30000;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -72,7 +74,8 @@ export class WorkflowExecutor {
     private workflowRepo: WorkflowRepository,
     private triggerProxy: TriggerProxyService,
     private clientRegistry: ServiceClientRegistry,
-    private io: SocketIOServer
+    private io: SocketIOServer,
+    private runRepo?: RunRepository
   ) {}
 
   /**
@@ -298,6 +301,17 @@ export class WorkflowExecutor {
         completedNodes: completedNodes.length,
         failedNodes: failedNodes.length,
       });
+
+      // Bridge to run_history so workflow runs appear on the Runs page
+      await this.bridgeToRunHistory(run, finalStatus === 'completed' ? 'COMPLETED' : 'FAILED', {
+        output: finalOutput,
+        errorMessage: failedNodes.length > 0
+          ? `${failedNodes.length} node(s) failed: ${failedNodes.map(([id]) => id).join(', ')}`
+          : undefined,
+        startedAt: new Date(startTime),
+        completedAt: new Date(),
+        durationMs,
+      });
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
       logger.error('Workflow execution crashed', { runId, workflowId, error: errMsg });
@@ -313,6 +327,14 @@ export class WorkflowExecutor {
         runId,
         workflowId,
         error: errMsg,
+      });
+
+      // Bridge crash to run_history
+      await this.bridgeToRunHistory(run, 'FAILED', {
+        errorMessage: `Execution crashed: ${errMsg}`,
+        startedAt: new Date(startTime),
+        completedAt: new Date(),
+        durationMs: Date.now() - startTime,
       });
     }
   }
@@ -376,8 +398,11 @@ export class WorkflowExecutor {
 
   private async pollTriggerRun(triggerRunId: string): Promise<unknown> {
     const deadline = Date.now() + DEFAULT_NODE_TIMEOUT_MS;
+    let pollInterval = POLL_INITIAL_INTERVAL_MS;
+    let attempt = 0;
 
     while (Date.now() < deadline) {
+      attempt++;
       try {
         const runStatus = await this.triggerProxy.getRun(triggerRunId);
         const status = runStatus?.data?.status || runStatus?.status;
@@ -397,15 +422,22 @@ export class WorkflowExecutor {
           );
         }
 
-        // Still running — wait and poll again
-        await sleep(POLL_INTERVAL_MS);
+        // Still running — wait with exponential backoff
+        await sleep(pollInterval);
+        pollInterval = Math.min(pollInterval * 2, POLL_MAX_INTERVAL_MS);
       } catch (err: unknown) {
         if (err instanceof Error && err.message.includes('run ')) {
           throw err; // Re-throw status errors
         }
-        // Network error — retry
-        logger.warn('Poll error, retrying', { triggerRunId, error: (err as Error).message });
-        await sleep(POLL_INTERVAL_MS);
+        // Network error — retry with backoff
+        logger.warn('Poll error, retrying', {
+          triggerRunId,
+          attempt,
+          nextInterval: pollInterval,
+          error: (err as Error).message,
+        });
+        await sleep(pollInterval);
+        pollInterval = Math.min(pollInterval * 2, POLL_MAX_INTERVAL_MS);
       }
     }
 
@@ -430,7 +462,7 @@ export class WorkflowExecutor {
     logger.info('Executing SkillNode', { skillId });
 
     const input = { ...inputData, ...(data.inputOverrides ?? {}) };
-    const result = await (client as any).invoke(skillId, input);
+    const result = await (client as SkillsEngineClient).invoke(skillId, input);
 
     return {
       output: result?.output ?? result,
@@ -457,7 +489,7 @@ export class WorkflowExecutor {
 
     logger.info('Executing MageAgentNode', { model });
 
-    const result = await (client as any).process({
+    const result = await (client as MageAgentClient).process({
       prompt,
       model,
       systemPrompt: data.systemPrompt,
@@ -492,7 +524,7 @@ export class WorkflowExecutor {
 
     logger.info('Executing N8nWorkflowNode', { workflowId });
 
-    const result = await (client as any).triggerWorkflow({
+    const result = await (client as N8NClient).triggerWorkflow({
       workflowId,
       data: inputData,
     });
@@ -603,6 +635,47 @@ export class WorkflowExecutor {
       progress: 100,
       ...updates,
     });
+  }
+
+  /**
+   * Bridge a completed workflow run into run_history so it appears on the Runs page.
+   */
+  private async bridgeToRunHistory(
+    run: WorkflowRun,
+    status: 'COMPLETED' | 'FAILED',
+    details: {
+      output?: Record<string, any>;
+      errorMessage?: string;
+      startedAt?: Date;
+      completedAt?: Date;
+      durationMs?: number;
+    }
+  ): Promise<void> {
+    if (!this.runRepo) return;
+
+    try {
+      await this.runRepo.create({
+        triggerRunId: `wf_${run.runId}`,
+        projectId: run.workflowId, // Use workflowId as project reference
+        organizationId: run.organizationId,
+        taskIdentifier: `workflow:${run.workflowId}`,
+        status,
+        payload: run.parameters,
+        output: details.output,
+        errorMessage: details.errorMessage,
+        startedAt: details.startedAt,
+        completedAt: details.completedAt,
+        durationMs: details.durationMs,
+        metadata: { workflowRunId: run.runId, workflowId: run.workflowId },
+        tags: ['workflow'],
+      });
+      logger.debug('Bridged workflow run to run_history', { runId: run.runId });
+    } catch (err) {
+      logger.warn('Failed to bridge workflow run to run_history', {
+        runId: run.runId,
+        error: (err as Error).message,
+      });
+    }
   }
 }
 

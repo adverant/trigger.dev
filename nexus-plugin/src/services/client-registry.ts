@@ -3,9 +3,13 @@
  *
  * Maps service names to their integration clients.
  * Each client must implement a healthCheck() method.
+ * Tracks initialization failures for observability.
  */
 
 import type { ServiceName } from '../database/repositories/integration-config.repository';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger({ component: 'client-registry' });
 
 export interface HealthCheckResult {
   status: 'healthy' | 'degraded' | 'unhealthy';
@@ -17,6 +21,17 @@ export interface ServiceClient {
 }
 
 export type ServiceClientRegistry = Map<ServiceName, ServiceClient>;
+
+/** Tracks which clients failed to initialize and why */
+const failedClients = new Map<string, { error: string; timestamp: Date }>();
+
+/**
+ * Get the list of clients that failed to initialize.
+ * Used by health/integrations endpoints for visibility.
+ */
+export function getFailedClients(): Map<string, { error: string; timestamp: Date }> {
+  return failedClients;
+}
 
 /**
  * Build a registry of service clients, safely skipping any that fail to initialize.
@@ -114,11 +129,28 @@ export function buildClientRegistry(
 
     try {
       registry.set(service as ServiceName, factory());
+      failedClients.delete(service); // Clear any previous failure
     } catch (err: any) {
-      // Client construction failed (e.g., missing env var) — skip silently
-      console.warn(`[ClientRegistry] Failed to initialize ${service} client: ${err.message}`);
+      logger.error('Failed to initialize integration client', {
+        service,
+        error: err.message,
+        url,
+      });
+      failedClients.set(service, {
+        error: err.message,
+        timestamp: new Date(),
+      });
     }
   }
+
+  logger.info('Client registry initialized', {
+    initialized: Array.from(registry.keys()),
+    failed: Array.from(failedClients.keys()),
+    skipped: Object.keys(clientFactories).filter(s => {
+      const ckm: Record<string, string> = { 'gpu-bridge': 'gpuBridge', 'skills-engine': 'skillsEngine' };
+      return !(serviceUrls as any)[ckm[s] || s];
+    }),
+  });
 
   return registry;
 }

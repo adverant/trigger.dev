@@ -1,4 +1,5 @@
-import axios, { AxiosInstance, AxiosError } from "axios";
+import { AxiosInstance, AxiosError } from "axios";
+import { createResilientClient } from "./resilient-client";
 
 // --- Interfaces ---
 
@@ -104,7 +105,8 @@ export class SandboxClient {
   constructor(organizationId: string) {
     const baseURL = process.env.SANDBOX_URL || "http://nexus-sandbox:9092";
 
-    this.client = axios.create({
+    this.client = createResilientClient({
+      serviceName: 'sandbox',
       baseURL,
       timeout: 120000,
       headers: {

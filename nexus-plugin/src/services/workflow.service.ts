@@ -91,8 +91,8 @@ export class WorkflowService {
     return workflow;
   }
 
-  async getWorkflow(workflowId: string): Promise<Workflow> {
-    const workflow = await this.workflowRepo.findById(workflowId);
+  async getWorkflow(workflowId: string, orgId?: string): Promise<Workflow> {
+    const workflow = await this.workflowRepo.findById(workflowId, orgId);
     if (!workflow) throw new NotFoundError(`Workflow ${workflowId} not found`);
     return workflow;
   }

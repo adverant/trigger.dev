@@ -117,7 +117,7 @@ export function loadConfig(): AppConfig {
   // Support both plugin-runner configmap names (AUTH_API_URL) and our names (NEXUS_AUTH_URL)
   const nexus: NexusConfig = {
     authUrl: optionalEnv('AUTH_API_URL', optionalEnv('NEXUS_AUTH_URL', 'http://nexus-auth.nexus.svc.cluster.local:9101')),
-    apiKey: optionalEnv('NEXUS_API_KEY', ''),
+    apiKey: requiredEnv('NEXUS_API_KEY'),
     services: {
       graphrag: optionalEnv('GRAPHRAG_API_URL', optionalEnv('GRAPHRAG_URL', 'http://nexus-graphrag:8090')),
       mageagent: optionalEnv('MAGEAGENT_API_URL', optionalEnv('MAGEAGENT_URL', 'http://nexus-mageagent:8080')),
@@ -139,7 +139,7 @@ export function loadConfig(): AppConfig {
     port: intEnv('DATABASE_PORT', intEnv('POSTGRES_PORT', 5432)),
     database: optionalEnv('DATABASE_NAME', optionalEnv('POSTGRES_DB', optionalEnv('POSTGRES_DATABASE', 'nexus'))),
     user: optionalEnv('DATABASE_USER', optionalEnv('POSTGRES_USER', 'nexus')),
-    password: optionalEnv('DATABASE_PASSWORD', optionalEnv('POSTGRES_PASSWORD', '')),
+    password: requiredEnv('DATABASE_PASSWORD'),
     ssl: boolEnv('POSTGRES_SSL', false),
     maxConnections: intEnv('POSTGRES_MAX_CONNECTIONS', 20),
   };

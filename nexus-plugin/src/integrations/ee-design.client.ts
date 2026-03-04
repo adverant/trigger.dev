@@ -9,7 +9,8 @@
  * - Parameter updates for running operations
  */
 
-import axios, { AxiosInstance, AxiosError } from 'axios';
+import { AxiosInstance, AxiosError } from 'axios';
+import { createResilientClient } from './resilient-client';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────
 
@@ -94,7 +95,8 @@ export class EEDesignClient {
     const baseURL = process.env.EE_DESIGN_API_URL
       || 'http://nexus-ee-design.nexus.svc.cluster.local:3400';
 
-    this.http = axios.create({
+    this.http = createResilientClient({
+      serviceName: 'ee-design',
       baseURL: `${baseURL}/api/v1`,
       timeout: 7200000, // 2 hour timeout — pipeline phases can take 2-80 min
       headers: {

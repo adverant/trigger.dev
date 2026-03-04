@@ -1,4 +1,5 @@
-import axios, { AxiosInstance, AxiosError } from "axios";
+import { AxiosInstance, AxiosError } from "axios";
+import { createResilientClient } from "./resilient-client";
 
 // --- Interfaces ---
 
@@ -133,7 +134,8 @@ export class GraphRAGClient {
       throw new Error("GRAPHRAG_URL environment variable is not set");
     }
 
-    this.client = axios.create({
+    this.client = createResilientClient({
+      serviceName: 'graphrag',
       baseURL,
       timeout: 30000,
       headers: {

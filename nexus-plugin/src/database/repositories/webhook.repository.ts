@@ -135,11 +135,20 @@ export class WebhookRepository {
     return (result.rowCount ?? 0) > 0;
   }
 
-  async incrementFailureCount(webhookId: string): Promise<void> {
-    await this.db.query(
-      `UPDATE trigger.webhooks SET failure_count = failure_count + 1 WHERE webhook_id = $1`,
-      [webhookId]
-    );
+  async incrementFailureCount(webhookId: string, orgId?: string): Promise<void> {
+    if (orgId) {
+      await this.db.queryWithOrg(
+        orgId,
+        `UPDATE trigger.webhooks SET failure_count = failure_count + 1
+         WHERE webhook_id = $1 AND organization_id = $2`,
+        [webhookId, orgId]
+      );
+    } else {
+      await this.db.query(
+        `UPDATE trigger.webhooks SET failure_count = failure_count + 1 WHERE webhook_id = $1`,
+        [webhookId]
+      );
+    }
   }
 
   async findActiveByEvent(orgId: string, event: string): Promise<Webhook[]> {

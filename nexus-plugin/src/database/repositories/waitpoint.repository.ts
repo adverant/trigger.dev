@@ -80,12 +80,19 @@ export class WaitpointRepository {
     return row ? this.mapRow(row) : null;
   }
 
-  async findByTokenId(tokenId: string): Promise<Waitpoint | null> {
+  async findByTokenId(tokenId: string, orgId?: string): Promise<Waitpoint | null> {
+    if (orgId) {
+      const row = await this.db.queryOneWithOrg<any>(
+        orgId,
+        `SELECT * FROM trigger.waitpoints WHERE token_id = $1 AND organization_id = $2`,
+        [tokenId, orgId]
+      );
+      return row ? this.mapRow(row) : null;
+    }
     const row = await this.db.queryOne<any>(
       `SELECT * FROM trigger.waitpoints WHERE token_id = $1`,
       [tokenId]
     );
-
     return row ? this.mapRow(row) : null;
   }
 
@@ -124,13 +131,23 @@ export class WaitpointRepository {
     return this.mapRow(row);
   }
 
-  async expire(tokenId: string): Promise<void> {
-    await this.db.query(
-      `UPDATE trigger.waitpoints
-       SET status = 'expired', completed_at = NOW()
-       WHERE token_id = $1 AND status = 'pending'`,
-      [tokenId]
-    );
+  async expire(tokenId: string, orgId?: string): Promise<void> {
+    if (orgId) {
+      await this.db.queryWithOrg(
+        orgId,
+        `UPDATE trigger.waitpoints
+         SET status = 'expired', completed_at = NOW()
+         WHERE token_id = $1 AND organization_id = $2 AND status = 'pending'`,
+        [tokenId, orgId]
+      );
+    } else {
+      await this.db.query(
+        `UPDATE trigger.waitpoints
+         SET status = 'expired', completed_at = NOW()
+         WHERE token_id = $1 AND status = 'pending'`,
+        [tokenId]
+      );
+    }
   }
 
   private mapRow(row: any): Waitpoint {

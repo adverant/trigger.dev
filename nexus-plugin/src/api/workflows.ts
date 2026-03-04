@@ -132,7 +132,8 @@ export function createWorkflowRouter(
   router.get(
     '/:id',
     asyncHandler(async (req: Request, res: Response) => {
-      const workflow = await workflowService.getWorkflow(req.params.id);
+      const orgId = req.user!.organizationId;
+      const workflow = await workflowService.getWorkflow(req.params.id, orgId);
       res.json({ success: true, data: toUI(workflow) });
     })
   );

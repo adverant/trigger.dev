@@ -1,4 +1,5 @@
-import axios, { AxiosInstance, AxiosError } from "axios";
+import { AxiosInstance, AxiosError } from "axios";
+import { createResilientClient } from "./resilient-client";
 
 // --- Interfaces ---
 
@@ -96,7 +97,8 @@ export class JupyterClient {
       throw new Error("JUPYTER_URL environment variable is not set");
     }
 
-    this.client = axios.create({
+    this.client = createResilientClient({
+      serviceName: 'jupyter',
       baseURL,
       timeout: 120000,
       headers: {

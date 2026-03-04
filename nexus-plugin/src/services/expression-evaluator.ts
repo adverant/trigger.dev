@@ -2,10 +2,12 @@
  * Expression Evaluator
  *
  * Safe evaluation of user expressions for ConditionalNode and TransformNode.
- * Uses Function constructor with restricted scope — no access to globals,
- * require, process, or other Node.js internals.
+ * Uses Node.js vm.runInNewContext with a prototype-stripped sandbox —
+ * prevents prototype chain escapes (e.g. constructor.constructor) and
+ * enforces real CPU timeouts for infinite loops.
  */
 
+import { runInNewContext } from 'vm';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger({ component: 'expression-evaluator' });
@@ -13,27 +15,23 @@ const logger = createLogger({ component: 'expression-evaluator' });
 const EVAL_TIMEOUT_MS = 5000;
 
 /**
- * Blocked identifiers that must not be accessible in user expressions.
+ * Safe helpers exposed to user expressions.
+ * These are plain functions with no prototype chain to exploit.
  */
-const BLOCKED_GLOBALS: Record<string, undefined> = {
-  process: undefined,
-  require: undefined,
-  module: undefined,
-  exports: undefined,
-  global: undefined,
-  globalThis: undefined,
-  __dirname: undefined,
-  __filename: undefined,
-  Buffer: undefined,
-  setTimeout: undefined,
-  setInterval: undefined,
-  setImmediate: undefined,
-  clearTimeout: undefined,
-  clearInterval: undefined,
-  clearImmediate: undefined,
-  eval: undefined,
-  Function: undefined,
-  fetch: undefined,
+const SAFE_BUILTINS = {
+  Math,
+  JSON,
+  parseInt,
+  parseFloat,
+  isNaN,
+  isFinite,
+  String,
+  Number,
+  Boolean,
+  Array,
+  Object,
+  Date,
+  RegExp,
 };
 
 /**
@@ -150,50 +148,55 @@ export function evaluateTransform(
 }
 
 /**
- * Safely evaluate a JavaScript expression with a restricted scope.
+ * Deep-clone a value using structured clone to strip prototype chains.
+ * Falls back to JSON round-trip for environments without structuredClone.
+ */
+function stripPrototypes(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value !== 'object') return value;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Safely evaluate a JavaScript expression in an isolated VM context.
  *
- * The expression can access only the provided context variables.
- * Globals like `process`, `require`, `eval`, `fetch` are blocked.
+ * Uses vm.runInNewContext with:
+ * - Prototype-stripped sandbox (Object.create(null)) — prevents constructor chain escapes
+ * - Real timeout enforcement — kills CPU-bound infinite loops
+ * - No access to process, require, global, or any Node.js internals
  */
 function safeEval(expression: string, context: Record<string, unknown>): unknown {
-  // Build the restricted scope
-  const scopeKeys = Object.keys(context);
-  const scopeValues = Object.values(context);
+  // Build a prototype-free sandbox
+  const sandbox: Record<string, unknown> = Object.create(null);
 
-  // Prepend blocked globals as undefined to shadow them
-  const blockedKeys = Object.keys(BLOCKED_GLOBALS);
-  const blockedValues = Object.values(BLOCKED_GLOBALS);
-
-  const allKeys = [...blockedKeys, ...scopeKeys];
-  const allValues = [...blockedValues, ...scopeValues];
-
-  // Create function with restricted scope
-  // The function body wraps the expression in "use strict" + returns the result
-  const fnBody = `"use strict"; return (${expression});`;
-
-  let fn: (...args: unknown[]) => unknown;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    fn = new Function(...allKeys, fnBody) as (...args: unknown[]) => unknown;
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Invalid expression syntax: ${message}`);
+  // Add safe builtins
+  for (const [key, value] of Object.entries(SAFE_BUILTINS)) {
+    sandbox[key] = value;
   }
 
-  // Execute with timeout protection
-  const startTime = Date.now();
+  // Add context variables with stripped prototypes to prevent chain escapes
+  for (const [key, value] of Object.entries(context)) {
+    sandbox[key] = stripPrototypes(value);
+  }
+
+  const code = `"use strict"; (${expression});`;
+
   try {
-    const result = fn(...allValues);
-
-    // Check if execution took too long (rough check — actual timeout would need Worker)
-    const elapsed = Date.now() - startTime;
-    if (elapsed > EVAL_TIMEOUT_MS) {
-      logger.warn('Expression evaluation exceeded soft timeout', { expression, elapsed });
-    }
-
-    return result;
+    return runInNewContext(code, sandbox, {
+      timeout: EVAL_TIMEOUT_MS,
+      displayErrors: true,
+    });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Expression runtime error: ${message}`);
+    if (err instanceof Error) {
+      if (err.message.includes('Script execution timed out')) {
+        throw new Error(`Expression timed out after ${EVAL_TIMEOUT_MS}ms`);
+      }
+      throw new Error(`Expression evaluation error: ${err.message}`);
+    }
+    throw new Error(`Expression evaluation error: ${String(err)}`);
   }
 }

@@ -1,4 +1,5 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
+import { AxiosInstance, AxiosError } from 'axios';
+import { createResilientClient } from './resilient-client';
 
 // --- Interfaces ---
 
@@ -87,7 +88,8 @@ export class ProseCreatorClient {
     const baseURL =
       process.env.PROSECREATOR_ENDPOINT || 'http://nexus-prosecreator:3000';
 
-    this.client = axios.create({
+    this.client = createResilientClient({
+      serviceName: 'prosecreator',
       baseURL,
       timeout: 300000, // 5 min for generation tasks
       headers: {

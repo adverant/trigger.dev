@@ -1,4 +1,5 @@
-import axios, { AxiosInstance, AxiosError } from "axios";
+import { AxiosInstance, AxiosError } from "axios";
+import { createResilientClient } from "./resilient-client";
 
 // --- Interfaces ---
 
@@ -105,7 +106,8 @@ export class LearningAgentClient {
       throw new Error("LEARNINGAGENT_URL environment variable is not set");
     }
 
-    this.client = axios.create({
+    this.client = createResilientClient({
+      serviceName: 'learningagent',
       baseURL,
       timeout: 60000,
       headers: {

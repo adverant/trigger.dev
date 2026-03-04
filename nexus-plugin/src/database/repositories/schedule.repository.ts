@@ -214,25 +214,21 @@ export class ScheduleRepository {
     return (result.rowCount ?? 0) > 0;
   }
 
-  async incrementRunCount(scheduleId: string, success: boolean): Promise<void> {
-    if (success) {
-      await this.db.query(
-        `UPDATE trigger.schedule_configs
-         SET run_count = run_count + 1,
-             success_count = success_count + 1,
-             last_run_at = NOW(),
-             last_status = 'COMPLETED'
-         WHERE schedule_id = $1`,
-        [scheduleId]
+  async incrementRunCount(scheduleId: string, success: boolean, orgId?: string): Promise<void> {
+    const statusFields = success
+      ? `run_count = run_count + 1, success_count = success_count + 1, last_run_at = NOW(), last_status = 'COMPLETED'`
+      : `run_count = run_count + 1, failure_count = failure_count + 1, last_run_at = NOW(), last_status = 'FAILED'`;
+
+    if (orgId) {
+      await this.db.queryWithOrg(
+        orgId,
+        `UPDATE trigger.schedule_configs SET ${statusFields}
+         WHERE schedule_id = $1 AND organization_id = $2`,
+        [scheduleId, orgId]
       );
     } else {
       await this.db.query(
-        `UPDATE trigger.schedule_configs
-         SET run_count = run_count + 1,
-             failure_count = failure_count + 1,
-             last_run_at = NOW(),
-             last_status = 'FAILED'
-         WHERE schedule_id = $1`,
+        `UPDATE trigger.schedule_configs SET ${statusFields} WHERE schedule_id = $1`,
         [scheduleId]
       );
     }

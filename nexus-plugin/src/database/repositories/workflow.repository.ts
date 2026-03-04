@@ -163,7 +163,16 @@ export class WorkflowRepository {
     return rowToWorkflow(row);
   }
 
-  async findById(workflowId: string): Promise<Workflow | null> {
+  async findById(workflowId: string, organizationId?: string): Promise<Workflow | null> {
+    if (organizationId) {
+      const row = await this.db.queryOneWithOrg<any>(
+        organizationId,
+        `SELECT * FROM trigger.workflows WHERE workflow_id = $1 AND organization_id = $2`,
+        [workflowId, organizationId]
+      );
+      return row ? rowToWorkflow(row) : null;
+    }
+    // Fallback for system-level lookups (e.g., workflow executor mid-run)
     const row = await this.db.queryOne<any>(
       `SELECT * FROM trigger.workflows WHERE workflow_id = $1`,
       [workflowId]
@@ -345,7 +354,15 @@ export class WorkflowRepository {
     return rowToWorkflowRun(row);
   }
 
-  async findRunById(runId: string): Promise<WorkflowRun | null> {
+  async findRunById(runId: string, organizationId?: string): Promise<WorkflowRun | null> {
+    if (organizationId) {
+      const row = await this.db.queryOneWithOrg<any>(
+        organizationId,
+        `SELECT * FROM trigger.workflow_runs WHERE run_id = $1 AND organization_id = $2`,
+        [runId, organizationId]
+      );
+      return row ? rowToWorkflowRun(row) : null;
+    }
     const row = await this.db.queryOne<any>(
       `SELECT * FROM trigger.workflow_runs WHERE run_id = $1`,
       [runId]

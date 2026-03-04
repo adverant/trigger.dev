@@ -250,6 +250,107 @@ export class DatabaseService {
     return match ? match[1] : 'unknown';
   }
 
+  // ── Org-scoped query methods (RLS enforcement) ──────────────────
+
+  /**
+   * Execute a query within an org-scoped RLS context.
+   * Wraps the query in a transaction with SET LOCAL app.current_organization_id.
+   */
+  async queryWithOrg<T extends QueryResultRow = any>(
+    orgId: string,
+    text: string,
+    params?: any[]
+  ): Promise<QueryResult<T>> {
+    const client = await this.pool.connect();
+    const start = Date.now();
+    const operation = this.extractOperation(text);
+
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT set_config('app.current_organization_id', $1, true)", [orgId]);
+      const result = await client.query<T>(text, params);
+      await client.query('COMMIT');
+
+      const duration = (Date.now() - start) / 1000;
+      dbQueryDuration.observe({ operation, table: this.extractTable(text) }, duration);
+
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      const duration = (Date.now() - start) / 1000;
+      logger.error('Org-scoped query failed', {
+        error,
+        operation,
+        orgId,
+        duration,
+        text: text.substring(0, 100),
+      });
+      dbErrors.inc({ operation, error_type: error instanceof Error ? error.name : 'unknown' });
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Execute an org-scoped query and return first row
+   */
+  async queryOneWithOrg<T extends QueryResultRow = any>(
+    orgId: string,
+    text: string,
+    params?: any[]
+  ): Promise<T | null> {
+    const result = await this.queryWithOrg<T>(orgId, text, params);
+    return result.rows[0] || null;
+  }
+
+  /**
+   * Execute an org-scoped query and return all rows
+   */
+  async queryManyWithOrg<T extends QueryResultRow = any>(
+    orgId: string,
+    text: string,
+    params?: any[]
+  ): Promise<T[]> {
+    const result = await this.queryWithOrg<T>(orgId, text, params);
+    return result.rows;
+  }
+
+  /**
+   * Execute a transaction within an org-scoped RLS context.
+   */
+  async transactionWithOrg<T>(
+    orgId: string,
+    callback: (client: PoolClient) => Promise<T>
+  ): Promise<T> {
+    const client = await this.pool.connect();
+    const start = Date.now();
+
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT set_config('app.current_organization_id', $1, true)", [orgId]);
+
+      const result = await callback(client);
+
+      await client.query('COMMIT');
+      const duration = (Date.now() - start) / 1000;
+      logger.debug('Org-scoped transaction committed', { orgId, duration });
+      dbQueryDuration.observe({ operation: 'transaction', table: 'all' }, duration);
+
+      return result;
+    } catch (error) {
+      const duration = (Date.now() - start) / 1000;
+      logger.error('Org-scoped transaction failed, rolling back', { error, orgId, duration });
+
+      await client.query('ROLLBACK').catch(() => {});
+      dbErrors.inc({ operation: 'transaction', error_type: 'rollback' });
+
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   getPool(): Pool {
     return this.pool;
   }

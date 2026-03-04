@@ -20,7 +20,7 @@ import { requireAuth } from './middleware/auth';
 import { errorHandler, notFoundHandler } from './middleware/error-handler';
 import { requestLogger } from './middleware/request-logger';
 import { usageTracker } from './middleware/usage-tracker';
-import { QuotaEnforcer } from './middleware/quota-enforcer';
+import { QuotaEnforcer, quotaEnforcerMiddleware } from './middleware/quota-enforcer';
 import { HealthChecker } from './utils/health-checker';
 import { createLogger } from './utils/logger';
 import { register as metricsRegistry, httpRequestDuration, httpRequestTotal } from './utils/metrics';
@@ -197,7 +197,8 @@ class NexusTriggerServer {
         workflowRepo,
         triggerProxy,
         this.clientRegistry,
-        this.io
+        this.io,
+        runRepo
       );
       const workflowService = new WorkflowService(workflowRepo, this.io, workflowExecutor);
       this.syncService = new SyncService(triggerProxy, runRepo, scheduleRepo);
@@ -460,6 +461,11 @@ class NexusTriggerServer {
     apiRouter.use(requireAuth(this.authClient));
     apiRouter.use(rateLimiter(limiters));
     apiRouter.use(usageTrackerMiddleware);
+
+    // Quota enforcement on execution-triggering routes (check before handler runs)
+    apiRouter.post('/workflows/:wid/run', quotaEnforcerMiddleware(quotaEnforcer, 'concurrent_runs'));
+    apiRouter.post('/tasks/:taskId/trigger', quotaEnforcerMiddleware(quotaEnforcer, 'tasks_per_minute'));
+    apiRouter.post('/schedules', quotaEnforcerMiddleware(quotaEnforcer, 'schedules'));
 
     // Mount route modules (match actual function signatures)
     apiRouter.use('/projects', createProjectRouter(projectService, this.io));

@@ -105,41 +105,54 @@ type TierLimiters = {
 };
 
 /**
- * HTTP rate limiting middleware
+ * In-memory fallback limiters for when Redis is unavailable.
+ * Lazily initialized on first Redis failure.
+ */
+let memoryFallback: TierLimiters | null = null;
+
+function getMemoryFallback(): TierLimiters {
+  if (!memoryFallback) {
+    logger.warn('Initializing in-memory rate limiter fallback (Redis unavailable)');
+    memoryFallback = createMemoryRateLimiter();
+  }
+  return memoryFallback;
+}
+
+/**
+ * HTTP rate limiting middleware.
+ * On Redis failure, falls back to in-memory limiter (fail-closed, not fail-open).
  */
 export function rateLimiter(limiters: TierLimiters) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const user = req.user;
+    const tier = user?.tier || 'open_source';
+    const key = user?.organizationId || req.ip || req.socket.remoteAddress || 'unknown';
+    const config = RATE_LIMITS[tier as keyof typeof RATE_LIMITS] || RATE_LIMITS.open_source;
+
+    // Try primary limiters first, fall back to in-memory on error
+    let activeLimiter = limiters[tier as keyof TierLimiters] || limiters.open_source;
+
     try {
-      const user = req.user;
-      const tier = user?.tier || 'open_source';
-      const key = user?.organizationId || req.ip || req.socket.remoteAddress || 'unknown';
-      const limiter = limiters[tier as keyof TierLimiters] || limiters.open_source;
-      const config = RATE_LIMITS[tier as keyof typeof RATE_LIMITS] || RATE_LIMITS.open_source;
+      const rateLimitInfo = await activeLimiter.consume(key);
 
-      try {
-        const rateLimitInfo = await limiter.consume(key);
+      res.setHeader('X-RateLimit-Limit', config.points);
+      res.setHeader('X-RateLimit-Remaining', rateLimitInfo.remainingPoints);
+      res.setHeader('X-RateLimit-Reset', new Date(Date.now() + rateLimitInfo.msBeforeNext).toISOString());
 
-        res.setHeader('X-RateLimit-Limit', config.points);
-        res.setHeader('X-RateLimit-Remaining', rateLimitInfo.remainingPoints);
-        res.setHeader('X-RateLimit-Reset', new Date(Date.now() + rateLimitInfo.msBeforeNext).toISOString());
-
-        rateLimitRemaining.set(
-          {
-            organization_id: user?.organizationId || 'anonymous',
-            tier,
-            limit_type: 'http',
-          },
-          rateLimitInfo.remainingPoints
-        );
-
-        logger.debug('Rate limit check passed', {
-          organizationId: user?.organizationId,
+      rateLimitRemaining.set(
+        {
+          organization_id: user?.organizationId || 'anonymous',
           tier,
-          remaining: rateLimitInfo.remainingPoints,
-        });
+          limit_type: 'http',
+        },
+        rateLimitInfo.remainingPoints
+      );
 
-        next();
-      } catch (rateLimitError: any) {
+      next();
+    } catch (rateLimitError: any) {
+      // Check if this is a rate limit exceeded error (has msBeforeNext) vs a Redis error
+      if (rateLimitError.msBeforeNext !== undefined) {
+        // Rate limit exceeded
         const retryAfter = Math.ceil(rateLimitError.msBeforeNext / 1000);
 
         logger.warn('Rate limit exceeded', {
@@ -165,10 +178,39 @@ export function rateLimiter(limiters: TierLimiters) {
             tier,
           })
         );
+      } else {
+        // Redis connection error — fall back to in-memory limiter (fail-closed)
+        logger.error('Redis rate limiter failed, falling back to in-memory', {
+          error: rateLimitError.message || rateLimitError,
+        });
+
+        try {
+          const fallback = getMemoryFallback();
+          activeLimiter = fallback[tier as keyof TierLimiters] || fallback.open_source;
+          const fallbackInfo = await activeLimiter.consume(key);
+
+          res.setHeader('X-RateLimit-Limit', config.points);
+          res.setHeader('X-RateLimit-Remaining', fallbackInfo.remainingPoints);
+          res.setHeader('X-RateLimit-Reset', new Date(Date.now() + fallbackInfo.msBeforeNext).toISOString());
+
+          next();
+        } catch (fallbackError: any) {
+          if (fallbackError.msBeforeNext !== undefined) {
+            const retryAfter = Math.ceil(fallbackError.msBeforeNext / 1000);
+            res.setHeader('Retry-After', retryAfter);
+            next(
+              new RateLimitError('Rate limit exceeded. Please try again later.', {
+                retryAfter,
+                tier,
+              })
+            );
+          } else {
+            // Both Redis and memory failed — deny request (fail-closed)
+            logger.error('All rate limiters failed, denying request', { error: fallbackError });
+            next(new RateLimitError('Service temporarily unavailable', { retryAfter: 10, tier }));
+          }
+        }
       }
-    } catch (error) {
-      logger.error('Rate limiter error', { error });
-      next();
     }
   };
 }

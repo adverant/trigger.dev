@@ -1,4 +1,5 @@
-import axios, { AxiosInstance, AxiosError } from "axios";
+import { AxiosInstance, AxiosError } from "axios";
+import { createResilientClient } from "./resilient-client";
 
 // --- Interfaces ---
 
@@ -86,7 +87,8 @@ export class GeoAgentClient {
       throw new Error("GEOAGENT_URL environment variable is not set");
     }
 
-    this.client = axios.create({
+    this.client = createResilientClient({
+      serviceName: 'geoagent',
       baseURL,
       timeout: 120000,
       headers: {
