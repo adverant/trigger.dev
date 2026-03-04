@@ -117,7 +117,7 @@ export function loadConfig(): AppConfig {
   // Support both plugin-runner configmap names (AUTH_API_URL) and our names (NEXUS_AUTH_URL)
   const nexus: NexusConfig = {
     authUrl: optionalEnv('AUTH_API_URL', optionalEnv('NEXUS_AUTH_URL', 'http://nexus-auth.nexus.svc.cluster.local:9101')),
-    apiKey: requiredEnv('NEXUS_API_KEY'),
+    apiKey: optionalEnv('NEXUS_API_KEY', ''),
     services: {
       graphrag: optionalEnv('GRAPHRAG_API_URL', optionalEnv('GRAPHRAG_URL', 'http://nexus-graphrag:8090')),
       mageagent: optionalEnv('MAGEAGENT_API_URL', optionalEnv('MAGEAGENT_URL', 'http://nexus-mageagent:8080')),
