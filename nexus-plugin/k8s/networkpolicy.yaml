@@ -119,7 +119,15 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
-    # nexus-n8n
+    # nexus-skills-engine
+    - to:
+        - podSelector:
+            matchLabels:
+              app: nexus-skills-engine
+      ports:
+        - protocol: TCP
+          port: 8095
+    # nexus-n8n (K8s instances)
     - to:
         - podSelector:
             matchLabels:
@@ -127,6 +135,8 @@ spec:
       ports:
         - protocol: TCP
           port: 5678
+        - protocol: TCP
+          port: 80
     # trigger-dev-webapp (self-hosted Trigger.dev)
     - to:
         - podSelector:

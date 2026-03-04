@@ -27,6 +27,7 @@ spec:
         app: nexus-trigger
         app.kubernetes.io/name: nexus-trigger
         app.kubernetes.io/component: plugin
+        app.kubernetes.io/part-of: nexus
         version: v1
       annotations:
         prometheus.io/scrape: "true"
@@ -192,6 +193,18 @@ spec:
                 configMapKeyRef:
                   name: nexus-trigger-config
                   key: NEXUS_N8N_URL
+            # Skills Engine
+            - name: SKILLS_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-trigger-config
+                  key: SKILLS_ENGINE_URL
+            # n8n API Key
+            - name: N8N_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-trigger-secrets
+                  key: N8N_API_KEY
           resources:
             requests:
               cpu: "500m"

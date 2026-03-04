@@ -26,6 +26,7 @@ data:
   NEXUS_CVAT_URL: "http://nexus-cvat.nexus.svc.cluster.local:8080"
   NEXUS_GPU_BRIDGE_URL: "http://nexus-gpu-bridge.nexus.svc.cluster.local:8080"
   NEXUS_N8N_URL: "http://n8n-main.n8n.svc.cluster.local:5678"
+  SKILLS_ENGINE_URL: "http://nexus-skills-engine.nexus.svc.cluster.local:8095"
 
   # Database
   POSTGRES_HOST: "nexus-postgres"
