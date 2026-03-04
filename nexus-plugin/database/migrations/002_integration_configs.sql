@@ -12,7 +12,8 @@ CREATE TABLE trigger.integration_configs (
     organization_id UUID NOT NULL,
     service_name VARCHAR(100) NOT NULL CHECK (service_name IN (
         'graphrag', 'mageagent', 'fileprocess', 'learningagent',
-        'geoagent', 'jupyter', 'cvat', 'gpu-bridge', 'sandbox', 'n8n'
+        'geoagent', 'jupyter', 'cvat', 'gpu-bridge', 'sandbox', 'n8n',
+        'skills-engine'
     )),
     enabled BOOLEAN NOT NULL DEFAULT FALSE,
     service_url VARCHAR(500),

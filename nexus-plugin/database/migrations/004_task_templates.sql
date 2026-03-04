@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS trigger.task_templates (
     template_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     service_name VARCHAR(100) NOT NULL CHECK (service_name IN (
         'graphrag', 'mageagent', 'fileprocess', 'learningagent',
-        'geoagent', 'jupyter', 'cvat', 'gpu-bridge', 'sandbox', 'n8n'
+        'geoagent', 'jupyter', 'cvat', 'gpu-bridge', 'sandbox', 'n8n',
+        'skills-engine'
     )),
     name VARCHAR(200) NOT NULL,
     description TEXT,

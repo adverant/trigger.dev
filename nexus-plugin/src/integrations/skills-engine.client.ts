@@ -66,6 +66,7 @@ export class SkillsEngineClient {
       headers: {
         'Content-Type': 'application/json',
         'X-Organization-ID': organizationId,
+        'X-User-Id': organizationId,
       },
     });
   }
@@ -95,8 +96,14 @@ export class SkillsEngineClient {
 
   async listSkills(params?: { category?: string; search?: string; limit?: number; offset?: number }): Promise<SkillListResponse> {
     try {
-      const response = await this.client.get<SkillListResponse>('/api/v1/skills', { params });
-      return response.data;
+      const response = await this.client.get('/api/v1/skills', { params });
+      const body = response.data;
+      // Skills Engine wraps responses: { success, data: { skills, pagination }, meta }
+      const inner = body?.data || body;
+      return {
+        skills: inner?.skills || [],
+        total: inner?.pagination?.total || inner?.total || 0,
+      };
     } catch (error) {
       throw this.handleError(error, 'SkillsEngine listSkills');
     }

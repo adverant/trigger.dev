@@ -86,14 +86,20 @@ export class N8NClient {
 
   constructor(organizationId: string) {
     const baseURL = process.env.N8N_URL || "http://nexus-n8n:5678";
+    const apiKey = process.env.N8N_API_KEY || "";
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "X-Organization-ID": organizationId,
+    };
+    if (apiKey) {
+      headers["X-N8N-API-KEY"] = apiKey;
+    }
 
     this.client = axios.create({
       baseURL,
       timeout: 30000,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Organization-ID": organizationId,
-      },
+      headers,
     });
   }
 
@@ -124,10 +130,13 @@ export class N8NClient {
 
   async listWorkflows(): Promise<N8NListWorkflowsResponse> {
     try {
-      const response = await this.client.get<N8NListWorkflowsResponse>(
-        "/api/v1/workflows"
-      );
-      return response.data;
+      const response = await this.client.get("/api/v1/workflows");
+      const body = response.data;
+      // n8n API returns { data: [...], nextCursor: null }
+      const workflows = Array.isArray(body?.data)
+        ? body.data
+        : body?.workflows || [];
+      return { workflows };
     } catch (error) {
       throw this.handleError(error, "N8N listWorkflows");
     }
@@ -176,11 +185,13 @@ export class N8NClient {
     params?: N8NListExecutionsParams
   ): Promise<N8NListExecutionsResponse> {
     try {
-      const response = await this.client.get<N8NListExecutionsResponse>(
-        "/api/v1/executions",
-        { params }
-      );
-      return response.data;
+      const response = await this.client.get("/api/v1/executions", { params });
+      const body = response.data;
+      // n8n API returns { data: [...], nextCursor: null }
+      const executions = Array.isArray(body?.data)
+        ? body.data
+        : body?.executions || [];
+      return { executions, total: executions.length };
     } catch (error) {
       throw this.handleError(error, "N8N listExecutions");
     }
