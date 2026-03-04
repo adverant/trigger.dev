@@ -71,8 +71,8 @@ import { buildClientRegistry, ServiceClientRegistry } from './services/client-re
 import { HealthWorkerService } from './services/health-worker.service';
 import type { ServiceName } from './database/repositories/integration-config.repository';
 
-// Task definition registry import removed — no longer auto-seeding fake data
-// Real task definitions are registered dynamically via the Trigger.dev SDK
+// Static task definition registry — seeded on startup so Tasks page is populated
+import { TASK_REGISTRY, toUpsertData } from './task-definitions/registry';
 
 const logger = createLogger({ service: 'nexus-trigger', component: 'server' });
 
@@ -172,7 +172,8 @@ class NexusTriggerServer {
       // Auto-seed integration configs with correct URLs for all orgs
       await this.seedIntegrationConfigs(integrationConfigRepo);
 
-      // Task definition seeding removed — only real data from Trigger.dev SDK
+      // Seed task definitions from static registry so Tasks page is populated
+      await this.seedTaskDefinitions(taskDefRepo);
 
       // Initialize services (match actual constructor signatures)
       const projectService = new ProjectService(projectRepo, usageRepo);
@@ -554,6 +555,47 @@ class NexusTriggerServer {
     }
 
     logger.info('Integration configs seeded', { seeded, updated, orgs: orgIds.length });
+  }
+
+  /**
+   * Seed task definitions from the static registry for every org/project pair.
+   * Uses ON CONFLICT to skip already-existing rows.
+   */
+  private async seedTaskDefinitions(
+    taskDefRepo: TaskDefinitionRepository
+  ): Promise<void> {
+    try {
+      const projects = await this.db.getPool().query(
+        `SELECT project_id, organization_id FROM trigger.projects`
+      );
+
+      if (projects.rows.length === 0) {
+        logger.info('No projects found, skipping task definition seed');
+        return;
+      }
+
+      let seeded = 0;
+      for (const proj of projects.rows) {
+        for (const entry of TASK_REGISTRY) {
+          try {
+            await taskDefRepo.upsert(
+              toUpsertData(entry, proj.project_id, proj.organization_id)
+            );
+            seeded++;
+          } catch {
+            // ON CONFLICT — already exists, skip
+          }
+        }
+      }
+
+      logger.info('Task definitions seeded from registry', {
+        total: seeded,
+        registry: TASK_REGISTRY.length,
+        projects: projects.rows.length,
+      });
+    } catch (err: any) {
+      logger.warn('Failed to seed task definitions', { error: err.message });
+    }
   }
 
   private setupUI(): void {
