@@ -162,14 +162,40 @@ function stripPrototypes(value: unknown): unknown {
 }
 
 /**
+ * Blocklist of tokens that must never appear in user expressions.
+ * These enable prototype-chain escapes out of the vm sandbox.
+ */
+const BLOCKED_TOKENS = [
+  'constructor',
+  '__proto__',
+  'prototype',
+  'process',
+  'require',
+  'global',
+  'globalThis',
+  'Function',
+  'eval',
+  'import',
+];
+
+const BLOCKED_PATTERN = new RegExp(`\\b(${BLOCKED_TOKENS.join('|')})\\b`);
+
+/**
  * Safely evaluate a JavaScript expression in an isolated VM context.
  *
  * Uses vm.runInNewContext with:
- * - Prototype-stripped sandbox (Object.create(null)) — prevents constructor chain escapes
+ * - Input token blocklist — prevents constructor chain and global escapes
+ * - Prototype-stripped sandbox (Object.create(null))
  * - Real timeout enforcement — kills CPU-bound infinite loops
  * - No access to process, require, global, or any Node.js internals
  */
 function safeEval(expression: string, context: Record<string, unknown>): unknown {
+  // Reject expressions containing dangerous tokens
+  const blockedMatch = expression.match(BLOCKED_PATTERN);
+  if (blockedMatch) {
+    throw new Error(`Blocked token "${blockedMatch[1]}" in expression`);
+  }
+
   // Build a prototype-free sandbox
   const sandbox: Record<string, unknown> = Object.create(null);
 
