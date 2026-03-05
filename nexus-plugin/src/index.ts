@@ -254,6 +254,15 @@ class NexusTriggerServer {
       );
       this.healthWorker.start();
 
+      // Recover orphaned Skills Engine runs from previous pod lifecycle
+      taskService.recoverOrphanedSkillsEngineRuns().then(count => {
+        if (count > 0) {
+          logger.warn(`Recovered ${count} orphaned Skills Engine run(s) from previous pod lifecycle`);
+        }
+      }).catch(err => {
+        logger.error('Failed to recover orphaned Skills Engine runs', { error: err.message });
+      });
+
       // Recover stale workflow runs from previous pod lifecycle
       workflowService.recoverStaleRuns().then(count => {
         if (count > 0) {

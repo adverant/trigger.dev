@@ -245,6 +245,33 @@ export class RunRepository {
     return this.mapRow(row);
   }
 
+  /**
+   * Merge additional key-value pairs into the run's metadata JSONB column.
+   */
+  async mergeMetadata(runId: string, extra: Record<string, any>): Promise<void> {
+    await this.db.query(
+      `UPDATE trigger.run_history SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb WHERE run_id = $2`,
+      [JSON.stringify(extra), runId]
+    );
+  }
+
+  /**
+   * Find Skills Engine runs stuck in EXECUTING for longer than the given threshold.
+   * Used on startup to recover orphaned runs after pod restarts.
+   */
+  async findOrphanedSkillsEngineRuns(staleMinutes: number = 5): Promise<Run[]> {
+    const rows = await this.db.queryMany<any>(
+      `SELECT * FROM trigger.run_history
+       WHERE status = 'EXECUTING'
+         AND task_identifier LIKE 'skills-engine-%'
+         AND created_at < NOW() - INTERVAL '1 minute' * $1
+       ORDER BY created_at ASC`,
+      [staleMinutes]
+    );
+
+    return rows.map((row) => this.mapRow(row));
+  }
+
   async markGraphRAGStored(runId: string): Promise<void> {
     await this.db.query(
       `UPDATE trigger.run_history SET graphrag_stored = TRUE WHERE run_id = $1`,

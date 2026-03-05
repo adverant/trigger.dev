@@ -253,6 +253,28 @@ export class SkillsEngineTaskHandler {
     throw new Error(`Skill generation timed out after ${DEFAULT_TIMEOUT_MS / 1000}s for job ${jobId}`);
   }
 
+  /**
+   * One-shot job status check — returns the current status without polling.
+   * Used for startup recovery of orphaned runs.
+   */
+  async checkJobStatus(jobId: string): Promise<{
+    status: string;
+    skillEntityId?: string;
+    error?: string;
+    phases?: any;
+  }> {
+    const response = await this.client.get(`/api/v1/skills/jobs/${jobId}`);
+    const jobData = response.data?.data || response.data;
+    const status = jobData.status?.toLowerCase() || 'unknown';
+
+    return {
+      status,
+      skillEntityId: jobData.skillEntityId || jobData.skillId,
+      error: jobData.error || jobData.errorMessage,
+      phases: jobData.phases,
+    };
+  }
+
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }

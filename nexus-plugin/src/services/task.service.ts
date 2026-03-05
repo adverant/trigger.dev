@@ -133,7 +133,7 @@ export class TaskService {
       payload,
       startedAt,
       idempotencyKey: options?.idempotencyKey,
-      metadata: { ...options?.metadata, source: 'skills-engine' },
+      metadata: { ...options?.metadata, source: 'skills-engine', userId, promptPreview: typeof payload?.prompt === 'string' ? payload.prompt.slice(0, 120) : undefined },
       tags: options?.tags || ['skills-engine'],
     });
 
@@ -195,6 +195,11 @@ export class TaskService {
         localRunId: run.runId,
         error: err.message,
       };
+    }
+
+    // Persist jobId/operationId in metadata so startup recovery can resume polling
+    if (jobId) {
+      this.runRepo.mergeMetadata(run.runId, { jobId, operationId }).catch(() => {});
     }
 
     // ASYNC: Poll Skills Engine for completion (don't block HTTP response)
@@ -537,6 +542,87 @@ export class TaskService {
     });
 
     return synced;
+  }
+
+  /**
+   * Recover Skills Engine runs orphaned by pod restarts.
+   * Checks if the Skills Engine job completed while this pod was down
+   * and updates the run record accordingly.
+   */
+  async recoverOrphanedSkillsEngineRuns(staleMinutes: number = 5): Promise<number> {
+    const orphanedRuns = await this.runRepo.findOrphanedSkillsEngineRuns(staleMinutes);
+
+    if (orphanedRuns.length === 0) return 0;
+
+    logger.info('Found orphaned Skills Engine runs to recover', { count: orphanedRuns.length });
+
+    let recovered = 0;
+    for (const run of orphanedRuns) {
+      try {
+        const metadata = run.metadata || {};
+        const jobId = metadata.jobId;
+
+        if (!jobId) {
+          // No jobId means startGeneration never returned — mark as failed
+          logger.warn('Orphaned run has no jobId, marking as FAILED', { runId: run.runId });
+          await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, 'Orphaned: no jobId (pod restarted before Skills Engine responded)');
+          recovered++;
+          continue;
+        }
+
+        // Check the job status on Skills Engine
+        const handler = new SkillsEngineTaskHandler(
+          run.organizationId,
+          metadata.userId || 'system'
+        );
+
+        const jobStatus = await handler.checkJobStatus(jobId);
+
+        if (jobStatus.status === 'completed') {
+          await this.runRepo.updateStatus(run.runId, 'COMPLETED', {
+            jobId,
+            skillEntityId: jobStatus.skillEntityId,
+            phases: jobStatus.phases,
+            recoveredOnStartup: true,
+          });
+          logger.info('Recovered completed Skills Engine run', {
+            runId: run.runId,
+            jobId,
+            skillEntityId: jobStatus.skillEntityId,
+          });
+        } else if (['failed', 'error', 'cancelled', 'canceled'].includes(jobStatus.status)) {
+          await this.runRepo.updateStatus(
+            run.runId,
+            'FAILED',
+            undefined,
+            jobStatus.error || `Job ended with status: ${jobStatus.status}`
+          );
+          logger.info('Recovered failed Skills Engine run', { runId: run.runId, jobId, status: jobStatus.status });
+        } else {
+          // Still running — resume polling
+          const operationId = metadata.operationId || '';
+          logger.info('Resuming polling for in-progress Skills Engine run', { runId: run.runId, jobId });
+          this.pollSkillsEngineAsync(
+            handler,
+            run.taskIdentifier,
+            jobId,
+            operationId,
+            run.runId,
+            run.triggerRunId,
+            run.organizationId,
+            metadata.userId || 'system'
+          ).catch((err) => {
+            logger.error('Resumed polling failed', { runId: run.runId, error: err.message });
+          });
+        }
+
+        recovered++;
+      } catch (err: any) {
+        logger.error('Failed to recover orphaned run', { runId: run.runId, error: err.message });
+      }
+    }
+
+    return recovered;
   }
 
   async storeInGraphRAG(
