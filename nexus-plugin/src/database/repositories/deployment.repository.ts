@@ -1,6 +1,6 @@
 import { DatabaseService } from '../database-service';
 
-export type DeploymentStatus = 'active' | 'superseded' | 'failed' | 'deploying' | 'rolled_back';
+export type DeploymentStatus = 'active' | 'superseded' | 'failed' | 'deploying' | 'rolled_back' | 'canceled';
 
 export interface DeploymentRow {
   deploymentId: string;
