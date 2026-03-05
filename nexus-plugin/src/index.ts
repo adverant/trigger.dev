@@ -481,6 +481,38 @@ class NexusTriggerServer {
     apiRouter.use('/workflows', createWorkflowRouter(workflowService, this.io));
     apiRouter.use('/jobs', createJobRouter(workflowService));
 
+    // Internal service-to-service webhook (no JWT, service-key auth only)
+    // Used by nexus-plugins to trigger platform-knowledge-refresh on plugin changes
+    this.app.post('/trigger/internal/tasks/:taskId/trigger', async (req, res) => {
+      const serviceKey = req.headers['x-service-key'] as string;
+      const expectedKey = process.env.INTERNAL_SERVICE_KEY;
+
+      if (!expectedKey || serviceKey !== expectedKey) {
+        return res.status(401).json({ error: 'Invalid service key' });
+      }
+
+      const { taskId } = req.params;
+      const payload = req.body?.payload || {};
+
+      try {
+        const projects = await this.db.getPool().query(
+          'SELECT project_id, organization_id FROM trigger.projects LIMIT 1'
+        );
+        if (projects.rows.length === 0) {
+          return res.status(500).json({ error: 'No projects configured' });
+        }
+        const { project_id, organization_id } = projects.rows[0];
+
+        const result = await taskService.triggerTask(
+          organization_id, 'system', project_id, taskId, payload
+        );
+        res.status(201).json({ success: true, data: result });
+      } catch (err: any) {
+        logger.error('Internal task trigger failed', { taskId, error: err.message });
+        res.status(500).json({ error: err.message });
+      }
+    });
+
     this.app.use('/trigger/api/v1', apiRouter);
 
     logger.info('API routes mounted at /trigger/api/v1');
