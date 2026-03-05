@@ -13,6 +13,8 @@ export interface TaskDefinition {
   machinePreset: string | null;
   isNexusIntegration: boolean;
   nexusService: string | null;
+  lastRunStatus: string | null;
+  lastRunAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -79,9 +81,16 @@ export class TaskDefinitionRepository {
 
   async findByProject(projectId: string, organizationId: string): Promise<TaskDefinition[]> {
     const rows = await this.db.queryMany<any>(
-      `SELECT * FROM trigger.task_definitions
-       WHERE project_id = $1 AND organization_id = $2
-       ORDER BY task_identifier ASC`,
+      `SELECT td.*, lr.status AS last_run_status, lr.created_at AS last_run_at
+       FROM trigger.task_definitions td
+       LEFT JOIN LATERAL (
+         SELECT status, created_at FROM trigger.run_history rh
+         WHERE rh.task_identifier = td.task_identifier
+           AND rh.organization_id = td.organization_id
+         ORDER BY rh.created_at DESC LIMIT 1
+       ) lr ON true
+       WHERE td.project_id = $1 AND td.organization_id = $2
+       ORDER BY td.task_identifier ASC`,
       [projectId, organizationId]
     );
     return rows.map((row) => this.mapRow(row));
@@ -89,9 +98,16 @@ export class TaskDefinitionRepository {
 
   async findByOrg(organizationId: string): Promise<TaskDefinition[]> {
     const rows = await this.db.queryMany<any>(
-      `SELECT * FROM trigger.task_definitions
-       WHERE organization_id = $1
-       ORDER BY task_identifier ASC`,
+      `SELECT td.*, lr.status AS last_run_status, lr.created_at AS last_run_at
+       FROM trigger.task_definitions td
+       LEFT JOIN LATERAL (
+         SELECT status, created_at FROM trigger.run_history rh
+         WHERE rh.task_identifier = td.task_identifier
+           AND rh.organization_id = td.organization_id
+         ORDER BY rh.created_at DESC LIMIT 1
+       ) lr ON true
+       WHERE td.organization_id = $1
+       ORDER BY td.task_identifier ASC`,
       [organizationId]
     );
     return rows.map((row) => this.mapRow(row));
@@ -141,6 +157,8 @@ export class TaskDefinitionRepository {
       machinePreset: row.machine_preset,
       isNexusIntegration: row.is_nexus_integration,
       nexusService: row.nexus_service,
+      lastRunStatus: row.last_run_status || null,
+      lastRunAt: row.last_run_at || null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

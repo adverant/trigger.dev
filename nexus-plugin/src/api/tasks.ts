@@ -31,6 +31,8 @@ function toUITask(task: any): Record<string, any> {
     schema: task.inputSchema || undefined,
     description: task.description || undefined,
     nexusIntegration: task.nexusService || undefined,
+    lastRunStatus: task.lastRunStatus || undefined,
+    lastRunAt: task.lastRunAt ? (task.lastRunAt.toISOString?.() ?? String(task.lastRunAt)) : undefined,
     createdAt: task.createdAt ? (task.createdAt.toISOString?.() ?? String(task.createdAt)) : new Date().toISOString(),
     updatedAt: task.updatedAt ? (task.updatedAt.toISOString?.() ?? String(task.updatedAt)) : new Date().toISOString(),
   };
