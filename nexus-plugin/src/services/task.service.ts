@@ -1,6 +1,8 @@
 import axios from 'axios';
+import { randomUUID } from 'crypto';
 import { Server as SocketIOServer } from 'socket.io';
 import { TriggerProxyService, TriggerTaskOptions, BatchTriggerItem } from './trigger-proxy.service';
+import { SkillsEngineTaskHandler } from './skills-engine-task-handler';
 import { ProjectRepository, Project } from '../database/repositories/project.repository';
 import { RunRepository, CreateRunData } from '../database/repositories/run.repository';
 import { TaskDefinitionRepository, UpsertTaskDefinitionData } from '../database/repositories/task-definition.repository';
@@ -37,6 +39,11 @@ export class TaskService {
     const project = await this.projectRepo.findById(projectId, orgId);
     if (!project) {
       throw new NotFoundError('Project', projectId);
+    }
+
+    // Skills Engine tasks are handled directly (not proxied to Trigger.dev workers)
+    if (taskId.startsWith('skills-engine-')) {
+      return this.handleSkillsEngineTask(orgId, projectId, taskId, payload, options);
     }
 
     const result = await this.proxy.triggerTask(taskId, payload, options);
@@ -90,6 +97,152 @@ export class TaskService {
       ...result,
       localRunId: run.runId,
     };
+  }
+
+  /**
+   * Handle Skills Engine tasks directly — creates a run record, then executes
+   * the handler async (generation can take minutes). Returns immediately with
+   * runId + jobId so the dashboard can track progress via both systems.
+   */
+  private async handleSkillsEngineTask(
+    orgId: string,
+    projectId: string,
+    taskId: string,
+    payload: any,
+    options?: TriggerTaskOptions
+  ): Promise<any> {
+    const triggerRunId = `se-${randomUUID()}`;
+    const startedAt = new Date();
+
+    // Create run record immediately (status: EXECUTING)
+    const run = await this.runRepo.create({
+      triggerRunId,
+      projectId,
+      organizationId: orgId,
+      taskIdentifier: taskId,
+      status: 'EXECUTING',
+      payload,
+      startedAt,
+      idempotencyKey: options?.idempotencyKey,
+      metadata: { ...options?.metadata, source: 'skills-engine' },
+      tags: options?.tags || ['skills-engine'],
+    });
+
+    await this.usageRepo.record(orgId, 'task_trigger', {
+      taskId,
+      projectId,
+      runId: run.runId,
+    });
+
+    triggerTasksTriggered.inc({ task_id: taskId, organization_id: orgId });
+    this.runStreamManager.trackRun(triggerRunId, run.runId, orgId, taskId);
+
+    emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+      taskId,
+      runId: run.runId,
+      triggerRunId,
+      status: 'EXECUTING',
+    });
+
+    logger.info('Skills Engine task triggered', { taskId, runId: run.runId, triggerRunId, orgId });
+
+    // Execute async — don't block the HTTP response
+    const handler = new SkillsEngineTaskHandler(orgId);
+    let jobId: string | undefined;
+    let operationId: string | undefined;
+
+    this.executeSkillsEngineAsync(handler, taskId, payload, run.runId, triggerRunId, orgId)
+      .catch((err) => {
+        logger.error('Skills Engine async execution failed', { error: err.message, runId: run.runId });
+      });
+
+    // For generate/regenerate, also kick off immediately to get jobId
+    if (taskId === 'skills-engine-generate' || taskId === 'skills-engine-regenerate') {
+      // Return immediately — the async handler will update the run when done
+      return {
+        id: triggerRunId,
+        runId: triggerRunId,
+        status: 'EXECUTING',
+        localRunId: run.runId,
+        taskId,
+      };
+    }
+
+    return {
+      id: triggerRunId,
+      runId: triggerRunId,
+      status: 'EXECUTING',
+      localRunId: run.runId,
+    };
+  }
+
+  /**
+   * Async execution of Skills Engine tasks. Updates run record on completion/failure.
+   */
+  private async executeSkillsEngineAsync(
+    handler: SkillsEngineTaskHandler,
+    taskId: string,
+    payload: any,
+    runId: string,
+    triggerRunId: string,
+    orgId: string
+  ): Promise<void> {
+    try {
+      let result: any;
+
+      const onProgress = (update: { jobId: string; status: string; phase?: string }) => {
+        emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+          taskId,
+          runId,
+          triggerRunId,
+          status: 'EXECUTING',
+          metadata: { jobId: update.jobId, phase: update.phase },
+        });
+      };
+
+      if (taskId === 'skills-engine-generate') {
+        result = await handler.handleGenerate(payload, onProgress);
+      } else if (taskId === 'skills-engine-regenerate') {
+        result = await handler.handleRegenerate(payload, onProgress);
+      } else {
+        throw new Error(`Unsupported skills-engine task: ${taskId}`);
+      }
+
+      // Update run as COMPLETED
+      await this.runRepo.updateStatus(runId, 'COMPLETED', {
+        jobId: result.jobId,
+        operationId: result.operationId,
+        skillEntityId: result.skillEntityId,
+        phases: result.phases,
+      });
+
+      emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+        taskId,
+        runId,
+        triggerRunId,
+        status: 'COMPLETED',
+        output: {
+          jobId: result.jobId,
+          skillEntityId: result.skillEntityId,
+        },
+      });
+
+      this.storeInGraphRAG(orgId, taskId, payload, result).catch(() => {});
+
+      logger.info('Skills Engine task completed', { taskId, runId, skillEntityId: result.skillEntityId });
+    } catch (error: any) {
+      await this.runRepo.updateStatus(runId, 'FAILED', undefined, error.message);
+
+      emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+        taskId,
+        runId,
+        triggerRunId,
+        status: 'FAILED',
+        error: error.message,
+      });
+
+      logger.error('Skills Engine task failed', { taskId, runId, error: error.message });
+    }
   }
 
   async batchTrigger(

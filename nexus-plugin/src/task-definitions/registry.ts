@@ -7,6 +7,7 @@
  */
 
 import type { UpsertTaskDefinitionData } from '../database/repositories/task-definition.repository';
+import { SKILLS_ENGINE_TASKS } from './skills-engine-tasks';
 
 export interface TaskRegistryEntry {
   taskIdentifier: string;
@@ -415,6 +416,9 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
     nexusService: 'sandbox',
     retryConfig: { maxAttempts: 1 },
   },
+
+  // ── Skills Engine (4) ─────────────────────────────────────────────
+  ...SKILLS_ENGINE_TASKS,
 ];
 
 /**
