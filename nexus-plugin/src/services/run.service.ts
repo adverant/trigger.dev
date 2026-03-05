@@ -37,25 +37,30 @@ export class RunService {
       throw new NotFoundError('Run', runId);
     }
 
-    // Get latest status from Trigger.dev
-    let triggerData: any = null;
-    try {
-      triggerData = await this.proxy.getRun(localRun.triggerRunId);
-    } catch (err: any) {
-      logger.warn('Could not fetch run from Trigger.dev, using local data', {
-        runId,
-        error: err.message,
-      });
-    }
+    // In-process runs (pc-*, se-*, pk-*) don't have an external Trigger.dev run —
+    // their status is managed entirely via local DB. Skip external polling.
+    const isInProcessRun = /^(pc|se|pk)-/.test(localRun.triggerRunId);
 
-    // Update local status if Trigger.dev has newer data
-    if (triggerData && triggerData.status !== localRun.status) {
-      await this.runRepo.updateStatus(
-        localRun.runId,
-        triggerData.status as RunStatus,
-        triggerData.output,
-        triggerData.error?.message
-      );
+    let triggerData: any = null;
+    if (!isInProcessRun) {
+      try {
+        triggerData = await this.proxy.getRun(localRun.triggerRunId);
+      } catch (err: any) {
+        logger.warn('Could not fetch run from Trigger.dev, using local data', {
+          runId,
+          error: err.message,
+        });
+      }
+
+      // Update local status if Trigger.dev has newer data
+      if (triggerData && triggerData.status !== localRun.status) {
+        await this.runRepo.updateStatus(
+          localRun.runId,
+          triggerData.status as RunStatus,
+          triggerData.output,
+          triggerData.error?.message
+        );
+      }
     }
 
     return {
