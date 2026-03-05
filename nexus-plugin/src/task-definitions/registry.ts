@@ -8,6 +8,7 @@
 
 import type { UpsertTaskDefinitionData } from '../database/repositories/task-definition.repository';
 import { SKILLS_ENGINE_TASKS } from './skills-engine-tasks';
+import { PLATFORM_KNOWLEDGE_TASKS } from './platform-knowledge-tasks';
 
 export interface TaskRegistryEntry {
   taskIdentifier: string;
@@ -419,6 +420,9 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
 
   // ── Skills Engine (4) ─────────────────────────────────────────────
   ...SKILLS_ENGINE_TASKS,
+
+  // ── Platform Knowledge (2) ────────────────────────────────────────
+  ...PLATFORM_KNOWLEDGE_TASKS,
 ];
 
 /**
