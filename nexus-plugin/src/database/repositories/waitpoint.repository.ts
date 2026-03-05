@@ -107,6 +107,25 @@ export class WaitpointRepository {
     return rows.map((row) => this.mapRow(row));
   }
 
+  async findAll(orgId: string, status?: string): Promise<Waitpoint[]> {
+    if (status) {
+      const rows = await this.db.queryMany<any>(
+        `SELECT * FROM trigger.waitpoints
+         WHERE organization_id = $1 AND status = $2
+         ORDER BY created_at DESC`,
+        [orgId, status]
+      );
+      return rows.map((row) => this.mapRow(row));
+    }
+    const rows = await this.db.queryMany<any>(
+      `SELECT * FROM trigger.waitpoints
+       WHERE organization_id = $1
+       ORDER BY created_at DESC`,
+      [orgId]
+    );
+    return rows.map((row) => this.mapRow(row));
+  }
+
   async complete(
     tokenId: string,
     orgId: string,

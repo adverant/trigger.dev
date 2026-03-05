@@ -66,6 +66,10 @@ export class WaitpointService {
     return this.waitpointRepo.findPending(orgId);
   }
 
+  async listAll(orgId: string, status?: string): Promise<Waitpoint[]> {
+    return this.waitpointRepo.findAll(orgId, status);
+  }
+
   async getWaitpoint(orgId: string, waitpointId: string): Promise<Waitpoint> {
     const waitpoint = await this.waitpointRepo.findById(waitpointId, orgId);
     if (!waitpoint) {
@@ -92,8 +96,15 @@ export class WaitpointService {
       throw new ValidationError(`Waitpoint is not in pending state (current: ${existing.status})`);
     }
 
-    // Complete in Trigger.dev
-    await this.proxy.completeWaitpointToken(tokenId, output);
+    // Complete in Trigger.dev (best-effort — proxy may not be configured)
+    try {
+      await this.proxy.completeWaitpointToken(tokenId, output);
+    } catch (err) {
+      logger.warn('Trigger.dev proxy call failed for completeWaitpointToken, continuing with local update', {
+        tokenId,
+        error: (err as Error).message,
+      });
+    }
 
     // Update locally
     const completed = await this.waitpointRepo.complete(tokenId, orgId, output, completedBy);

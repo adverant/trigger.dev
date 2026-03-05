@@ -18,15 +18,35 @@ export function createWaitpointRouter(
 ): Router {
   const router = Router();
 
-  // GET / - List pending waitpoints
+  // GET / - List waitpoints (with optional status filter)
   router.get(
     '/',
     asyncHandler(async (req: Request, res: Response) => {
-      const waitpoints = await waitpointService.listPending(req.user!.organizationId);
+      const status = req.query.status as string | undefined;
+      const waitpoints = await waitpointService.listAll(
+        req.user!.organizationId,
+        status || undefined
+      );
+
+      // Map to frontend-compatible shape (id instead of waitpointId)
+      const mapped = waitpoints.map((wp) => ({
+        id: wp.waitpointId,
+        type: 'token',
+        status: wp.status,
+        idempotencyKey: wp.tokenId,
+        description: wp.description,
+        input: wp.input,
+        output: wp.output,
+        expiresAt: wp.expiresAt?.toISOString() || null,
+        resolvedAt: wp.completedAt?.toISOString() || null,
+        createdAt: wp.createdAt.toISOString(),
+        runId: wp.runId,
+        taskSlug: wp.taskIdentifier,
+      }));
 
       res.json({
         success: true,
-        data: waitpoints,
+        data: mapped,
       });
     })
   );
@@ -90,16 +110,19 @@ export function createWaitpointRouter(
       const waitpointId = req.params.waitpointId;
       const orgId = req.user!.organizationId;
 
+      // Look up by waitpointId (UUID) to get the tokenId needed by service methods
+      const existing = await waitpointService.getWaitpoint(orgId, waitpointId);
+
       if (approved) {
         const waitpoint = await waitpointService.completeWaitpoint(
           orgId,
-          waitpointId,
+          existing.tokenId,
           output || { approved: true },
           req.user!.userId
         );
         res.json({ success: true, data: waitpoint });
       } else {
-        await waitpointService.cancelWaitpoint(orgId, waitpointId);
+        await waitpointService.cancelWaitpoint(orgId, existing.tokenId);
         res.json({ success: true, data: { cancelled: true } });
       }
     })
