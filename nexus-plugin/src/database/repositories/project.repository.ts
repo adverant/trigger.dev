@@ -71,6 +71,40 @@ export class ProjectRepository {
     return this.mapRow(row);
   }
 
+  /** Create with a specific project_id (for external services like ProseCreator). */
+  async createWithId(projectId: string, data: CreateProjectData): Promise<Project> {
+    const row = await this.db.queryOne<any>(
+      `INSERT INTO trigger.projects (
+        project_id, organization_id, user_id, trigger_project_ref, trigger_project_name,
+        environment, api_key_encrypted, personal_access_token_encrypted,
+        trigger_api_url, mode
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT (project_id) DO NOTHING
+      RETURNING *`,
+      [
+        projectId,
+        data.organizationId,
+        data.userId,
+        data.triggerProjectRef,
+        data.triggerProjectName || null,
+        data.environment,
+        data.apiKeyEncrypted || null,
+        data.personalAccessTokenEncrypted || null,
+        data.triggerApiUrl || 'http://trigger-dev-webapp:3030',
+        data.mode,
+      ]
+    );
+
+    // ON CONFLICT DO NOTHING returns null if already exists
+    if (!row) {
+      const existing = await this.findById(projectId, data.organizationId);
+      if (existing) return existing;
+      throw new Error('Failed to create project with specific ID');
+    }
+
+    return this.mapRow(row);
+  }
+
   async findById(projectId: string, orgId: string): Promise<Project | null> {
     const row = await this.db.queryOne<any>(
       `SELECT * FROM trigger.projects WHERE project_id = $1 AND organization_id = $2`,

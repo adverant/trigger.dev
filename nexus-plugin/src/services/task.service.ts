@@ -463,6 +463,21 @@ export class TaskService {
     payload: any,
     options?: TriggerTaskOptions
   ): Promise<any> {
+    // Auto-provision a project record if needed (run_history FK requires it).
+    // Insert with the ProseCreator project UUID so the FK matches.
+    const existingProject = await this.projectRepo.findById(projectId, orgId);
+    if (!existingProject) {
+      await this.projectRepo.createWithId(projectId, {
+        organizationId: orgId,
+        userId,
+        triggerProjectRef: `prosecreator-${projectId}`,
+        triggerProjectName: 'ProseCreator',
+        environment: 'production',
+        mode: 'self-hosted',
+      });
+      logger.info('Auto-provisioned Nexus Workflows project for ProseCreator', { projectId, orgId });
+    }
+
     const triggerRunId = `pc-${randomUUID()}`;
     const startedAt = new Date();
 
