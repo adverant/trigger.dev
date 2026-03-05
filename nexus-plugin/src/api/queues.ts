@@ -21,16 +21,21 @@ export function createQueueRouter(
       const page = req.query.page ? parseInt(req.query.page as string, 10) : undefined;
       const perPage = req.query.perPage ? parseInt(req.query.perPage as string, 10) : undefined;
 
-      const result = await queueService.listQueues(
-        req.user!.organizationId,
-        projectId,
-        { page, perPage }
-      );
+      try {
+        const result = await queueService.listQueues(
+          req.user!.organizationId,
+          projectId,
+          { page, perPage }
+        );
 
-      res.json({
-        success: true,
-        data: result,
-      });
+        res.json({
+          success: true,
+          data: result,
+        });
+      } catch (err) {
+        logger.warn('listQueues proxy failed, returning empty list', { error: (err as Error).message });
+        res.json({ success: true, data: [] });
+      }
     })
   );
 
@@ -38,15 +43,20 @@ export function createQueueRouter(
   router.post(
     '/:queueId/pause',
     asyncHandler(async (req: Request, res: Response) => {
-      const result = await queueService.pauseQueue(
-        req.user!.organizationId,
-        req.params.queueId
-      );
+      try {
+        const result = await queueService.pauseQueue(
+          req.user!.organizationId,
+          req.params.queueId
+        );
 
-      res.json({
-        success: true,
-        data: result,
-      });
+        res.json({
+          success: true,
+          data: result,
+        });
+      } catch (err) {
+        logger.warn('pauseQueue proxy failed', { error: (err as Error).message });
+        res.status(503).json({ success: false, error: { code: 'PROXY_UNAVAILABLE', message: 'Trigger.dev proxy not configured' } });
+      }
     })
   );
 
@@ -54,15 +64,20 @@ export function createQueueRouter(
   router.post(
     '/:queueId/resume',
     asyncHandler(async (req: Request, res: Response) => {
-      const result = await queueService.resumeQueue(
-        req.user!.organizationId,
-        req.params.queueId
-      );
+      try {
+        const result = await queueService.resumeQueue(
+          req.user!.organizationId,
+          req.params.queueId
+        );
 
-      res.json({
-        success: true,
-        data: result,
-      });
+        res.json({
+          success: true,
+          data: result,
+        });
+      } catch (err) {
+        logger.warn('resumeQueue proxy failed', { error: (err as Error).message });
+        res.status(503).json({ success: false, error: { code: 'PROXY_UNAVAILABLE', message: 'Trigger.dev proxy not configured' } });
+      }
     })
   );
 
