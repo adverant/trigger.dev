@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { Server as SocketIOServer } from 'socket.io';
 import { TriggerProxyService, TriggerTaskOptions, BatchTriggerItem } from './trigger-proxy.service';
 import { SkillsEngineTaskHandler } from './skills-engine-task-handler';
+import { syncPlatformKnowledge } from '../task-definitions/platform-knowledge-tasks';
 import { ProjectRepository, Project } from '../database/repositories/project.repository';
 import { RunRepository, CreateRunData } from '../database/repositories/run.repository';
 import { TaskDefinitionRepository, UpsertTaskDefinitionData } from '../database/repositories/task-definition.repository';
@@ -45,6 +46,11 @@ export class TaskService {
     // Skills Engine tasks are handled directly (not proxied to Trigger.dev workers)
     if (taskId.startsWith('skills-engine-')) {
       return this.handleSkillsEngineTask(orgId, userId, projectId, taskId, payload, options);
+    }
+
+    // Platform Knowledge tasks run locally (no Trigger.dev cloud worker)
+    if (taskId.startsWith('platform-knowledge-')) {
+      return this.handlePlatformKnowledgeTask(orgId, userId, projectId, taskId, payload, options);
     }
 
     const result = await this.proxy.triggerTask(taskId, payload, options);
@@ -334,6 +340,103 @@ export class TaskService {
 
       logger.error('Skills Engine batch regeneration failed', { taskId, runId, error: error.message });
     }
+  }
+
+  /**
+   * Handle Platform Knowledge tasks directly — runs syncPlatformKnowledge()
+   * in-process without proxying to Trigger.dev cloud.
+   */
+  private async handlePlatformKnowledgeTask(
+    orgId: string,
+    userId: string,
+    projectId: string,
+    taskId: string,
+    payload: any,
+    options?: TriggerTaskOptions
+  ): Promise<any> {
+    const triggerRunId = `pk-${randomUUID()}`;
+    const startedAt = new Date();
+
+    const run = await this.runRepo.create({
+      triggerRunId,
+      projectId,
+      organizationId: orgId,
+      taskIdentifier: taskId,
+      status: 'EXECUTING',
+      payload,
+      startedAt,
+      idempotencyKey: options?.idempotencyKey,
+      metadata: { ...options?.metadata, source: 'platform-knowledge' },
+      tags: options?.tags || ['platform-knowledge'],
+    });
+
+    await this.usageRepo.record(orgId, 'task_trigger', {
+      taskId,
+      projectId,
+      runId: run.runId,
+    });
+
+    triggerTasksTriggered.inc({ task_id: taskId, organization_id: orgId });
+
+    emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+      taskId,
+      runId: run.runId,
+      triggerRunId,
+      status: 'EXECUTING',
+    });
+
+    // Run async — don't block the HTTP response
+    syncPlatformKnowledge(orgId, payload?.reason || 'api-trigger')
+      .then(async (result) => {
+        await this.runRepo.updateStatus(run.runId, 'COMPLETED', {
+          pluginsCatalogued: result.pluginsCatalogued,
+          skillsCatalogued: result.skillsCatalogued,
+          documentId: result.documentId,
+          memoryId: result.memoryId,
+          durationMs: result.durationMs,
+          errors: result.errors,
+        });
+
+        emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+          taskId,
+          runId: run.runId,
+          triggerRunId,
+          status: 'COMPLETED',
+          output: {
+            pluginsCatalogued: result.pluginsCatalogued,
+            skillsCatalogued: result.skillsCatalogued,
+          },
+        });
+
+        logger.info('Platform knowledge sync completed', {
+          taskId,
+          runId: run.runId,
+          plugins: result.pluginsCatalogued,
+          skills: result.skillsCatalogued,
+          durationMs: result.durationMs,
+        });
+      })
+      .catch(async (err) => {
+        await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, err.message);
+
+        emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+          taskId,
+          runId: run.runId,
+          triggerRunId,
+          status: 'FAILED',
+          error: err.message,
+        });
+
+        logger.error('Platform knowledge sync failed', { taskId, runId: run.runId, error: err.message });
+      });
+
+    return {
+      id: triggerRunId,
+      runId: triggerRunId,
+      status: 'EXECUTING',
+      localRunId: run.runId,
+      taskId,
+    };
   }
 
   async batchTrigger(

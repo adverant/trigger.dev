@@ -164,9 +164,9 @@ function compilePlatformMarkdown(catalog: PlatformCatalog): string {
   return lines.join('\n');
 }
 
-// --- Shared sync logic ---
+// --- Shared sync logic (exported for direct invocation by task.service.ts) ---
 
-async function syncPlatformKnowledge(
+export async function syncPlatformKnowledge(
   orgId: string,
   reason: string
 ): Promise<PlatformKnowledgeSyncResult> {
