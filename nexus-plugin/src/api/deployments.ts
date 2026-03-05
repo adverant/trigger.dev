@@ -46,5 +46,29 @@ export function createDeploymentRouter(
     })
   );
 
+  // POST /:deploymentId/promote - Promote a deployment to active
+  router.post(
+    '/:deploymentId/promote',
+    asyncHandler(async (req: Request, res: Response) => {
+      const { deploymentId } = req.params;
+
+      const promoted = await deploymentService.promoteDeployment(
+        deploymentId,
+        req.user!.organizationId
+      );
+
+      logger.info('Deployment promoted via API', {
+        deploymentId,
+        orgId: req.user!.organizationId,
+        version: promoted.version,
+      });
+
+      res.json({
+        success: true,
+        data: promoted,
+      });
+    })
+  );
+
   return router;
 }
