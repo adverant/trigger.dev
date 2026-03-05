@@ -39,12 +39,18 @@ export class TaskService {
     payload: any,
     options?: TriggerTaskOptions
   ): Promise<any> {
+    // ProseCreator tasks run in-process — projectId is a ProseCreator UUID,
+    // not a Nexus Workflows project, so skip the project lookup.
+    if (taskId.startsWith('prosecreator-')) {
+      return this.handleProseCreatorTask(orgId, userId, projectId, taskId, payload, options);
+    }
+
     const project = await this.projectRepo.findById(projectId, orgId);
     if (!project) {
       throw new NotFoundError('Project', projectId);
     }
 
-    // Skills Engine tasks are handled directly (not proxied to Trigger.dev workers)
+    // Skills Engine tasks are handled directly (not proxied to cloud workers)
     if (taskId.startsWith('skills-engine-')) {
       return this.handleSkillsEngineTask(orgId, userId, projectId, taskId, payload, options);
     }
@@ -52,11 +58,6 @@ export class TaskService {
     // Platform Knowledge tasks run locally
     if (taskId.startsWith('platform-knowledge-')) {
       return this.handlePlatformKnowledgeTask(orgId, userId, projectId, taskId, payload, options);
-    }
-
-    // ProseCreator tasks run in-process (Claude Max Proxy, no external routing)
-    if (taskId.startsWith('prosecreator-')) {
-      return this.handleProseCreatorTask(orgId, userId, projectId, taskId, payload, options);
     }
 
     const result = await this.proxy.triggerTask(taskId, payload, options);
