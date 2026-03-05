@@ -27,10 +27,4 @@ export const SKILLS_ENGINE_TASKS: TaskRegistryEntry[] = [
     retryConfig: { maxAttempts: 1 },
     queueName: 'cron',
   },
-  {
-    taskIdentifier: 'skills-engine-sync-local',
-    description: 'Sync published skills to local Claude Code workspace',
-    nexusService: 'skills-engine',
-    retryConfig: { maxAttempts: 3, minTimeoutInMs: 2000, maxTimeoutInMs: 30000, factor: 2 },
-  },
 ];

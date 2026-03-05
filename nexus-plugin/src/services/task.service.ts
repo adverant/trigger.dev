@@ -31,6 +31,7 @@ export class TaskService {
 
   async triggerTask(
     orgId: string,
+    userId: string,
     projectId: string,
     taskId: string,
     payload: any,
@@ -43,7 +44,7 @@ export class TaskService {
 
     // Skills Engine tasks are handled directly (not proxied to Trigger.dev workers)
     if (taskId.startsWith('skills-engine-')) {
-      return this.handleSkillsEngineTask(orgId, projectId, taskId, payload, options);
+      return this.handleSkillsEngineTask(orgId, userId, projectId, taskId, payload, options);
     }
 
     const result = await this.proxy.triggerTask(taskId, payload, options);
@@ -81,7 +82,7 @@ export class TaskService {
     });
 
     // Optionally store in GraphRAG for semantic search
-    this.storeInGraphRAG(orgId, taskId, payload, result).catch((err) => {
+    this.storeInGraphRAG(orgId, userId, taskId, payload, result).catch((err) => {
       logger.warn('GraphRAG storage failed (non-blocking)', { error: err.message });
     });
 
@@ -100,12 +101,14 @@ export class TaskService {
   }
 
   /**
-   * Handle Skills Engine tasks directly — creates a run record, then executes
-   * the handler async (generation can take minutes). Returns immediately with
-   * runId + jobId so the dashboard can track progress via both systems.
+   * Handle Skills Engine tasks directly — creates a run record, synchronously
+   * gets jobId/operationId from Skills Engine, then polls async for completion.
+   * Returns immediately with runId + jobId + operationId so the dashboard can
+   * track progress via both Workflows and Skills Engine WebSocket/polling.
    */
   private async handleSkillsEngineTask(
     orgId: string,
+    userId: string,
     projectId: string,
     taskId: string,
     payload: any,
@@ -135,7 +138,10 @@ export class TaskService {
     });
 
     triggerTasksTriggered.inc({ task_id: taskId, organization_id: orgId });
-    this.runStreamManager.trackRun(triggerRunId, run.runId, orgId, taskId);
+
+    // NOTE: Do NOT call runStreamManager.trackRun() for se-* runs.
+    // Skills Engine runs have dedicated polling via pollSkillsEngineAsync().
+    // RunStreamManager would try to poll trigger-dev-webapp (which doesn't exist).
 
     emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
       taskId,
@@ -146,26 +152,57 @@ export class TaskService {
 
     logger.info('Skills Engine task triggered', { taskId, runId: run.runId, triggerRunId, orgId });
 
-    // Execute async — don't block the HTTP response
-    const handler = new SkillsEngineTaskHandler(orgId);
+    const handler = new SkillsEngineTaskHandler(orgId, userId);
     let jobId: string | undefined;
     let operationId: string | undefined;
 
-    this.executeSkillsEngineAsync(handler, taskId, payload, run.runId, triggerRunId, orgId)
-      .catch((err) => {
-        logger.error('Skills Engine async execution failed', { error: err.message, runId: run.runId });
+    // SYNC: Get jobId/operationId from Skills Engine before returning HTTP response.
+    // Skills Engine POST /generate and /regenerate return quickly (<1s) with a jobId;
+    // actual generation runs async on the Skills Engine side.
+    try {
+      if (taskId === 'skills-engine-generate') {
+        const init = await handler.startGeneration(payload);
+        jobId = init.jobId;
+        operationId = init.operationId;
+      } else if (taskId === 'skills-engine-regenerate') {
+        const init = await handler.startRegeneration(payload);
+        jobId = init.jobId;
+        operationId = init.operationId;
+      }
+    } catch (err: any) {
+      // If the sync start call fails, update run to FAILED and return error
+      logger.error('Skills Engine start failed', { taskId, error: err.message, runId: run.runId });
+      await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, err.message);
+
+      emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+        taskId,
+        runId: run.runId,
+        triggerRunId,
+        status: 'FAILED',
+        error: err.message,
       });
 
-    // For generate/regenerate, also kick off immediately to get jobId
-    if (taskId === 'skills-engine-generate' || taskId === 'skills-engine-regenerate') {
-      // Return immediately — the async handler will update the run when done
       return {
         id: triggerRunId,
         runId: triggerRunId,
-        status: 'EXECUTING',
+        status: 'FAILED',
         localRunId: run.runId,
-        taskId,
+        error: err.message,
       };
+    }
+
+    // ASYNC: Poll Skills Engine for completion (don't block HTTP response)
+    if (jobId) {
+      this.pollSkillsEngineAsync(handler, taskId, jobId, operationId!, run.runId, triggerRunId, orgId, userId)
+        .catch((err) => {
+          logger.error('Skills Engine polling failed', { error: err.message, runId: run.runId });
+        });
+    } else if (taskId === 'skills-engine-batch-regenerate') {
+      // Batch regeneration: fire-and-forget, Skills Engine handles it
+      this.executeBatchRegenerate(handler, payload, run.runId, triggerRunId, orgId, userId, taskId)
+        .catch((err) => {
+          logger.error('Skills Engine batch regeneration failed', { error: err.message, runId: run.runId });
+        });
     }
 
     return {
@@ -173,23 +210,28 @@ export class TaskService {
       runId: triggerRunId,
       status: 'EXECUTING',
       localRunId: run.runId,
+      jobId,
+      operationId,
+      taskId,
     };
   }
 
   /**
-   * Async execution of Skills Engine tasks. Updates run record on completion/failure.
+   * Async polling for Skills Engine job completion.
+   * Called after startGeneration/startRegeneration returns jobId.
+   * Updates run record and emits WebSocket events on completion/failure.
    */
-  private async executeSkillsEngineAsync(
+  private async pollSkillsEngineAsync(
     handler: SkillsEngineTaskHandler,
     taskId: string,
-    payload: any,
+    jobId: string,
+    operationId: string,
     runId: string,
     triggerRunId: string,
-    orgId: string
+    orgId: string,
+    userId: string
   ): Promise<void> {
     try {
-      let result: any;
-
       const onProgress = (update: { jobId: string; status: string; phase?: string }) => {
         emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
           taskId,
@@ -200,13 +242,7 @@ export class TaskService {
         });
       };
 
-      if (taskId === 'skills-engine-generate') {
-        result = await handler.handleGenerate(payload, onProgress);
-      } else if (taskId === 'skills-engine-regenerate') {
-        result = await handler.handleRegenerate(payload, onProgress);
-      } else {
-        throw new Error(`Unsupported skills-engine task: ${taskId}`);
-      }
+      const result = await handler.pollJobUntilDone(jobId, operationId, onProgress);
 
       // Update run as COMPLETED
       await this.runRepo.updateStatus(runId, 'COMPLETED', {
@@ -227,7 +263,7 @@ export class TaskService {
         },
       });
 
-      this.storeInGraphRAG(orgId, taskId, payload, result).catch(() => {});
+      this.storeInGraphRAG(orgId, userId, taskId, { jobId, operationId }, result).catch(() => {});
 
       logger.info('Skills Engine task completed', { taskId, runId, skillEntityId: result.skillEntityId });
     } catch (error: any) {
@@ -242,6 +278,61 @@ export class TaskService {
       });
 
       logger.error('Skills Engine task failed', { taskId, runId, error: error.message });
+    }
+  }
+
+  /**
+   * Execute batch regeneration asynchronously.
+   */
+  private async executeBatchRegenerate(
+    handler: SkillsEngineTaskHandler,
+    payload: any,
+    runId: string,
+    triggerRunId: string,
+    orgId: string,
+    userId: string,
+    taskId: string
+  ): Promise<void> {
+    try {
+      const onProgress = (update: { jobId: string; status: string; phase?: string }) => {
+        emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+          taskId,
+          runId,
+          triggerRunId,
+          status: 'EXECUTING',
+          metadata: { phase: update.phase },
+        });
+      };
+
+      const result = await handler.handleBatchRegenerate(payload, onProgress);
+
+      await this.runRepo.updateStatus(runId, 'COMPLETED', {
+        jobIds: result.jobIds,
+        total: result.total,
+        skipped: result.skipped,
+      });
+
+      emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+        taskId,
+        runId,
+        triggerRunId,
+        status: 'COMPLETED',
+        output: { total: result.total, skipped: result.skipped.length },
+      });
+
+      logger.info('Skills Engine batch regeneration completed', { taskId, runId, total: result.total });
+    } catch (error: any) {
+      await this.runRepo.updateStatus(runId, 'FAILED', undefined, error.message);
+
+      emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+        taskId,
+        runId,
+        triggerRunId,
+        status: 'FAILED',
+        error: error.message,
+      });
+
+      logger.error('Skills Engine batch regeneration failed', { taskId, runId, error: error.message });
     }
   }
 
@@ -347,6 +438,7 @@ export class TaskService {
 
   async storeInGraphRAG(
     orgId: string,
+    userId: string,
     taskId: string,
     payload: any,
     result: any
@@ -380,7 +472,9 @@ export class TaskService {
       await axios.post(`${graphragUrl}/api/v1/documents`, document, {
         headers: {
           'Content-Type': 'application/json',
-          'X-Organization-ID': orgId,
+          'X-Company-ID': orgId,
+          'X-App-ID': 'nexus-trigger',
+          'X-User-ID': userId,
         },
         timeout: 10000,
       });

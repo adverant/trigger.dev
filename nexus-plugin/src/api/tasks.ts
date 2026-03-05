@@ -171,6 +171,7 @@ export function createTaskRouter(
 
       const result = await taskService.triggerTask(
         req.user!.organizationId,
+        req.user!.userId,
         value.projectId,
         req.params.taskId,
         value.payload,

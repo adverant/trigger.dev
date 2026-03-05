@@ -3,9 +3,10 @@
  * and Skills Engine generation.
  *
  * When a `skills-engine-generate` task is triggered, this handler:
- * 1. POSTs to Skills Engine /api/v1/skills/generate
- * 2. Polls /api/v1/skills/jobs/:jobId with exponential backoff
- * 3. Returns final result (skillEntityId, jobId, operationId) as run output
+ * 1. POSTs to Skills Engine /api/v1/skills/generate (startGeneration)
+ * 2. Returns jobId/operationId immediately for progress tracking
+ * 3. Polls /api/v1/skills/jobs/:jobId with exponential backoff (pollJobUntilDone)
+ * 4. Returns final result (skillEntityId, jobId, operationId) as run output
  */
 
 import { AxiosInstance, AxiosError } from 'axios';
@@ -44,10 +45,16 @@ export interface SkillsEngineGenerateResult {
   error?: string;
 }
 
+export interface SkillsEngineBatchResult {
+  jobIds: string[];
+  total: number;
+  skipped: string[];
+}
+
 export class SkillsEngineTaskHandler {
   private client: AxiosInstance;
 
-  constructor(organizationId: string) {
+  constructor(organizationId: string, userId: string) {
     const baseURL = process.env.SKILLS_ENGINE_URL;
     if (!baseURL) {
       throw new Error('SKILLS_ENGINE_URL environment variable is not set');
@@ -60,22 +67,25 @@ export class SkillsEngineTaskHandler {
       headers: {
         'Content-Type': 'application/json',
         'X-Organization-ID': organizationId,
-        'X-User-Id': organizationId,
+        'X-User-Id': userId,
       },
     });
   }
 
+  // ===========================================================================
+  // START methods — kick off generation, return jobId/operationId immediately
+  // ===========================================================================
+
   /**
-   * Handle a skills-engine-generate task: POST to generate, poll for completion.
+   * Start skill generation: POST to Skills Engine, return jobId/operationId.
+   * Does NOT poll — returns as soon as Skills Engine acknowledges the request.
    */
-  async handleGenerate(
-    payload: SkillsEngineGeneratePayload,
-    onProgress?: (update: { jobId: string; status: string; phase?: string }) => void
-  ): Promise<SkillsEngineGenerateResult> {
-    // 1. Kick off generation
+  async startGeneration(
+    payload: SkillsEngineGeneratePayload
+  ): Promise<{ jobId: string; operationId: string }> {
     logger.info('Starting skill generation', { prompt: payload.prompt?.substring(0, 100) });
 
-    const generateResponse = await this.client.post('/api/v1/skills/generate', {
+    const response = await this.client.post('/api/v1/skills/generate', {
       prompt: payload.prompt,
       category: payload.category,
       model: payload.model,
@@ -84,25 +94,21 @@ export class SkillsEngineTaskHandler {
       skipPublish: payload.skipPublish,
     });
 
-    const { jobId, operationId } = generateResponse.data?.data || generateResponse.data;
+    const { jobId, operationId } = response.data?.data || response.data;
     if (!jobId) {
       throw new Error('Skills Engine did not return a jobId');
     }
 
     logger.info('Skill generation started', { jobId, operationId });
-    onProgress?.({ jobId, status: 'started' });
-
-    // 2. Poll for completion with exponential backoff
-    return this.pollJobUntilDone(jobId, operationId, onProgress);
+    return { jobId, operationId };
   }
 
   /**
-   * Handle a skills-engine-regenerate task.
+   * Start skill regeneration: POST to Skills Engine, return jobId/operationId.
    */
-  async handleRegenerate(
-    payload: { skillId: string; force?: boolean },
-    onProgress?: (update: { jobId: string; status: string; phase?: string }) => void
-  ): Promise<SkillsEngineGenerateResult> {
+  async startRegeneration(
+    payload: { skillId: string; force?: boolean }
+  ): Promise<{ jobId: string; operationId: string }> {
     logger.info('Starting skill regeneration', { skillId: payload.skillId });
 
     const response = await this.client.post(`/api/v1/skills/${payload.skillId}/regenerate`, {
@@ -115,15 +121,73 @@ export class SkillsEngineTaskHandler {
     }
 
     logger.info('Skill regeneration started', { jobId, operationId, skillId: payload.skillId });
-    onProgress?.({ jobId, status: 'started' });
+    return { jobId, operationId };
+  }
 
+  // ===========================================================================
+  // COMBINED methods — start + poll (used when called standalone, not via task.service)
+  // ===========================================================================
+
+  /**
+   * Full generate flow: start generation + poll until done.
+   */
+  async handleGenerate(
+    payload: SkillsEngineGeneratePayload,
+    onProgress?: (update: { jobId: string; status: string; phase?: string }) => void
+  ): Promise<SkillsEngineGenerateResult> {
+    const { jobId, operationId } = await this.startGeneration(payload);
+    onProgress?.({ jobId, status: 'started' });
     return this.pollJobUntilDone(jobId, operationId, onProgress);
   }
 
   /**
-   * Poll Skills Engine /jobs/:jobId until terminal state.
+   * Full regenerate flow: start regeneration + poll until done.
    */
-  private async pollJobUntilDone(
+  async handleRegenerate(
+    payload: { skillId: string; force?: boolean },
+    onProgress?: (update: { jobId: string; status: string; phase?: string }) => void
+  ): Promise<SkillsEngineGenerateResult> {
+    const { jobId, operationId } = await this.startRegeneration(payload);
+    onProgress?.({ jobId, status: 'started' });
+    return this.pollJobUntilDone(jobId, operationId, onProgress);
+  }
+
+  /**
+   * Batch regeneration: POST to Skills Engine regenerate-all endpoint.
+   * Returns immediately with jobIds — actual regeneration is fire-and-forget on Skills Engine.
+   */
+  async handleBatchRegenerate(
+    payload: { force?: boolean },
+    onProgress?: (update: { jobId: string; status: string; phase?: string }) => void
+  ): Promise<SkillsEngineBatchResult> {
+    logger.info('Starting batch skill regeneration', { force: payload.force });
+
+    const response = await this.client.post('/api/v1/skills/regenerate-all', {
+      force: payload.force ?? false,
+    });
+
+    const data = response.data?.data || response.data;
+    const result: SkillsEngineBatchResult = {
+      jobIds: data.jobIds || [],
+      total: data.total || 0,
+      skipped: data.skipped || [],
+    };
+
+    logger.info('Batch regeneration started', { total: result.total, skipped: result.skipped.length });
+    onProgress?.({ jobId: 'batch', status: 'started', phase: `${result.total} skills queued` });
+
+    return result;
+  }
+
+  // ===========================================================================
+  // POLLING — poll Skills Engine /jobs/:jobId until terminal state
+  // ===========================================================================
+
+  /**
+   * Poll Skills Engine /jobs/:jobId until terminal state.
+   * Public so task.service can call it separately after startGeneration().
+   */
+  async pollJobUntilDone(
     jobId: string,
     operationId: string,
     onProgress?: (update: { jobId: string; status: string; phase?: string }) => void
