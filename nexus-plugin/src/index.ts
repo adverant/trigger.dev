@@ -48,6 +48,7 @@ import { WaitpointService } from './services/waitpoint.service';
 import { DeploymentService } from './services/deployment.service';
 import { QueueService } from './services/queue.service';
 import { SyncService } from './services/sync.service';
+import { ScheduleExecutorService } from './services/schedule-executor.service';
 import { WorkflowService } from './services/workflow.service';
 import { WorkflowExecutor } from './services/workflow-executor';
 
@@ -88,6 +89,7 @@ class NexusTriggerServer {
   private syncService: SyncService;
   private healthWorker: HealthWorkerService;
   private clientRegistry: ServiceClientRegistry;
+  private scheduleExecutor: ScheduleExecutorService;
   private config: ReturnType<typeof loadConfig>;
 
   constructor() {
@@ -130,8 +132,9 @@ class NexusTriggerServer {
       pollIntervalMs: 3000,
     });
 
-    // Initialize sync service and health worker (placeholders - wired in start())
+    // Initialize sync service, schedule executor, and health worker (placeholders - wired in start())
     this.syncService = null as any;
+    this.scheduleExecutor = null as any;
     this.healthWorker = null as any;
     this.clientRegistry = new Map();
   }
@@ -188,7 +191,13 @@ class NexusTriggerServer {
         this.runStreamManager
       );
       const runService = new RunService(triggerProxy, runRepo, this.io);
-      const scheduleService = new ScheduleService(triggerProxy, scheduleRepo, usageRepo, this.io);
+      const scheduleService = new ScheduleService(scheduleRepo, usageRepo, this.io);
+
+      // Create in-process schedule executor (local cron engine — no Trigger.dev cloud needed)
+      this.scheduleExecutor = new ScheduleExecutorService(
+        scheduleRepo, taskService, this.io, this.db
+      );
+      scheduleService.setExecutor(this.scheduleExecutor);
       const waitpointService = new WaitpointService(triggerProxy, waitpointRepo, usageRepo, this.io);
       const deploymentService = new DeploymentService(triggerProxy, this.db);
       const queueService = new QueueService(triggerProxy, this.io);
@@ -244,6 +253,12 @@ class NexusTriggerServer {
 
       // Start periodic sync (every 30 seconds)
       this.syncService.startPeriodicSync(30000);
+
+      // Start in-process schedule executor (loads all enabled schedules from DB)
+      await this.scheduleExecutor.start();
+
+      // Seed default schedules (platform-knowledge-sync) if not already present
+      await this.seedDefaultSchedules(scheduleRepo);
 
       // Start background health check worker (every 60 seconds)
       this.healthWorker = new HealthWorkerService(
@@ -666,6 +681,54 @@ class NexusTriggerServer {
     logger.info('UI served from', { path: uiBuildPath });
   }
 
+  private async seedDefaultSchedules(scheduleRepo: ScheduleRepository): Promise<void> {
+    try {
+      // Get first project for org context
+      const projects = await this.db.getPool().query(
+        'SELECT project_id, organization_id FROM trigger.projects LIMIT 1'
+      );
+      if (projects.rows.length === 0) {
+        logger.warn('No projects found — skipping default schedule seeding');
+        return;
+      }
+      const { project_id, organization_id } = projects.rows[0];
+
+      // Check if platform-knowledge-sync schedule already exists
+      const existing = await scheduleRepo.findByOrgId(organization_id, {
+        taskIdentifier: 'platform-knowledge-sync',
+      });
+      if (existing.length > 0) {
+        logger.info('platform-knowledge-sync schedule already exists', {
+          scheduleId: existing[0].scheduleId,
+          enabled: existing[0].enabled,
+        });
+        return;
+      }
+
+      // Create the default schedule
+      const schedule = await scheduleRepo.create({
+        projectId: project_id,
+        organizationId: organization_id,
+        userId: 'system',
+        taskIdentifier: 'platform-knowledge-sync',
+        cronExpression: '0 3 * * *',
+        timezone: 'UTC',
+        description: 'Daily platform knowledge sync — catalogs all plugins and skills',
+        payload: { reason: 'scheduled-daily' },
+      });
+
+      // Register with executor
+      this.scheduleExecutor.addSchedule(schedule);
+
+      logger.info('Seeded platform-knowledge-sync schedule', {
+        scheduleId: schedule.scheduleId,
+        cron: '0 3 * * *',
+      });
+    } catch (err: any) {
+      logger.error('Failed to seed default schedules', { error: err.message });
+    }
+  }
+
   private setupGracefulShutdown(): void {
     const shutdown = async (signal: string) => {
       logger.info(`Received ${signal}, starting graceful shutdown...`);
@@ -681,6 +744,11 @@ class NexusTriggerServer {
       // Stop periodic sync
       if (this.syncService) {
         this.syncService.stopPeriodicSync();
+      }
+
+      // Stop schedule executor
+      if (this.scheduleExecutor) {
+        this.scheduleExecutor.stop();
       }
 
       // Stop health worker

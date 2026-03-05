@@ -1,23 +1,28 @@
 import { Server as SocketIOServer } from 'socket.io';
-import { TriggerProxyService, CreateScheduleData as TriggerCreateScheduleData } from './trigger-proxy.service';
 import { ScheduleRepository, Schedule, CreateScheduleData, UpdateScheduleData } from '../database/repositories/schedule.repository';
 import { UsageRepository } from '../database/repositories/usage.repository';
 import { WS_EVENTS } from '../websocket/events';
 import { emitToOrg } from '../websocket/socket-server';
 import { createLogger } from '../utils/logger';
 import { NotFoundError, ValidationError } from '../utils/errors';
+import type { ScheduleExecutorService } from './schedule-executor.service';
 
 const logger = createLogger({ component: 'schedule-service' });
 
 const CRON_REGEX = /^(\*|[0-9,\-\/]+)\s+(\*|[0-9,\-\/]+)\s+(\*|[0-9,\-\/]+)\s+(\*|[0-9,\-\/]+)\s+(\*|[0-9,\-\/]+)$/;
 
 export class ScheduleService {
+  private executor: ScheduleExecutorService | null = null;
+
   constructor(
-    private proxy: TriggerProxyService,
     private scheduleRepo: ScheduleRepository,
     private usageRepo: UsageRepository,
     private io: SocketIOServer
   ) {}
+
+  setExecutor(executor: ScheduleExecutorService): void {
+    this.executor = executor;
+  }
 
   async createSchedule(
     orgId: string,
@@ -38,21 +43,13 @@ export class ScheduleService {
       throw new ValidationError(`Invalid cron expression: ${data.cron}`);
     }
 
-    // Create schedule in Trigger.dev
-    const triggerData: TriggerCreateScheduleData = {
-      task: data.task,
-      cron: data.cron,
-      externalId: data.externalId,
-      deduplicationKey: data.deduplicationKey,
-      timezone: data.timezone,
-      environments: data.environments,
-    };
+    // Calculate next run time locally
+    const nextRuns = this.getNextExecutions(data.cron, data.timezone || 'UTC', 1);
+    const nextRunAt = nextRuns.length > 0 ? nextRuns[0] : undefined;
 
-    const triggerResult = await this.proxy.createSchedule(triggerData);
-
-    // Store locally with enrichment
+    // Store in database (no cloud proxy needed)
     const schedule = await this.scheduleRepo.create({
-      triggerScheduleId: triggerResult.id,
+      triggerScheduleId: null,
       projectId,
       organizationId: orgId,
       userId,
@@ -62,10 +59,13 @@ export class ScheduleService {
       description: data.description,
       payload: data.payload,
       externalId: data.externalId,
-      nextRunAt: triggerResult.nextRunTimestamp
-        ? new Date(triggerResult.nextRunTimestamp)
-        : undefined,
+      nextRunAt,
     });
+
+    // Register with in-process cron executor
+    if (this.executor) {
+      this.executor.addSchedule(schedule);
+    }
 
     await this.usageRepo.record(orgId, 'schedule_run', {
       action: 'create',
@@ -110,18 +110,8 @@ export class ScheduleService {
       throw new NotFoundError('Schedule', scheduleId);
     }
 
-    // Update in Trigger.dev
-    if (existing.triggerScheduleId && (data.cron || data.externalId)) {
-      const triggerUpdate: any = {};
-      if (data.cron) {
-        if (!CRON_REGEX.test(data.cron)) {
-          throw new ValidationError(`Invalid cron expression: ${data.cron}`);
-        }
-        triggerUpdate.cron = data.cron;
-      }
-      if (data.externalId) triggerUpdate.externalId = data.externalId;
-
-      await this.proxy.updateSchedule(existing.triggerScheduleId, triggerUpdate);
+    if (data.cron && !CRON_REGEX.test(data.cron)) {
+      throw new ValidationError(`Invalid cron expression: ${data.cron}`);
     }
 
     // Update locally
@@ -132,7 +122,22 @@ export class ScheduleService {
     if (data.timezone) updateData.timezone = data.timezone;
     if (data.payload !== undefined) updateData.payload = data.payload;
 
+    // Recalculate next run if cron or timezone changed
+    if (data.cron || data.timezone) {
+      const cronExpr = data.cron || existing.cronExpression;
+      const tz = data.timezone || existing.timezone;
+      const nextRuns = this.getNextExecutions(cronExpr, tz, 1);
+      if (nextRuns.length > 0) {
+        updateData.nextRunAt = nextRuns[0];
+      }
+    }
+
     const updated = await this.scheduleRepo.update(scheduleId, orgId, updateData);
+
+    // Update in-process cron executor
+    if (this.executor) {
+      this.executor.updateSchedule(updated);
+    }
 
     emitToOrg(this.io, orgId, WS_EVENTS.SCHEDULE_UPDATED, {
       scheduleId,
@@ -152,12 +157,12 @@ export class ScheduleService {
       throw new NotFoundError('Schedule', scheduleId);
     }
 
-    // Delete from Trigger.dev
-    if (existing.triggerScheduleId) {
-      await this.proxy.deleteSchedule(existing.triggerScheduleId);
+    // Remove from in-process cron executor
+    if (this.executor) {
+      this.executor.removeSchedule(scheduleId);
     }
 
-    // Delete locally
+    // Delete from database
     await this.scheduleRepo.delete(scheduleId, orgId);
 
     emitToOrg(this.io, orgId, WS_EVENTS.SCHEDULE_DELETED, {
@@ -178,16 +183,16 @@ export class ScheduleService {
       throw new NotFoundError('Schedule', scheduleId);
     }
 
-    // Activate/deactivate in Trigger.dev
-    if (existing.triggerScheduleId) {
+    const updated = await this.scheduleRepo.update(scheduleId, orgId, { enabled });
+
+    // Add/remove from in-process cron executor
+    if (this.executor) {
       if (enabled) {
-        await this.proxy.activateSchedule(existing.triggerScheduleId);
+        this.executor.addSchedule(updated);
       } else {
-        await this.proxy.deactivateSchedule(existing.triggerScheduleId);
+        this.executor.removeSchedule(scheduleId);
       }
     }
-
-    const updated = await this.scheduleRepo.update(scheduleId, orgId, { enabled });
 
     emitToOrg(this.io, orgId, WS_EVENTS.SCHEDULE_UPDATED, {
       scheduleId,
@@ -205,9 +210,6 @@ export class ScheduleService {
     timezone: string,
     count: number = 5
   ): Date[] {
-    // Simple cron next-execution calculator
-    // For production, a full cron parser library like `cron-parser` would be used.
-    // Since `node-cron` is in dependencies, we parse manually.
     const results: Date[] = [];
     const parts = cronExpression.split(/\s+/);
     if (parts.length !== 5) return results;
@@ -215,7 +217,6 @@ export class ScheduleService {
     const now = new Date();
     let current = new Date(now.getTime());
 
-    // Basic approach: iterate minute-by-minute up to count matches (max 365 days)
     const maxIterations = 525600; // 1 year of minutes
     for (let i = 0; i < maxIterations && results.length < count; i++) {
       current = new Date(current.getTime() + 60000);
