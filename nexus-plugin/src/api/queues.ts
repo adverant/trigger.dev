@@ -16,14 +16,7 @@ export function createQueueRouter(
   router.get(
     '/',
     asyncHandler(async (req: Request, res: Response) => {
-      const projectId = req.query.projectId as string;
-      if (!projectId) {
-        res.status(400).json({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: 'projectId query parameter is required' },
-        });
-        return;
-      }
+      const projectId = (req.query.projectId as string) || 'default';
 
       const page = req.query.page ? parseInt(req.query.page as string, 10) : undefined;
       const perPage = req.query.perPage ? parseInt(req.query.perPage as string, 10) : undefined;

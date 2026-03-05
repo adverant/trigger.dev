@@ -37,12 +37,14 @@ export function createEnvironmentRouter(
   router.get(
     '/',
     asyncHandler(async (req: Request, res: Response) => {
-      const result = await triggerProxy.listEnvVars();
-
-      res.json({
-        success: true,
-        data: result,
-      });
+      try {
+        const result = await triggerProxy.listEnvVars();
+        res.json({ success: true, data: result });
+      } catch (err) {
+        // Trigger.dev proxy not configured — return empty list
+        logger.warn('listEnvVars proxy failed, returning empty list', { error: (err as Error).message });
+        res.json({ success: true, data: [] });
+      }
     })
   );
 
@@ -63,12 +65,13 @@ export function createEnvironmentRouter(
         return;
       }
 
-      const result = await triggerProxy.createEnvVar(value.name, value.value);
-
-      res.status(201).json({
-        success: true,
-        data: result,
-      });
+      try {
+        const result = await triggerProxy.createEnvVar(value.name, value.value);
+        res.status(201).json({ success: true, data: result });
+      } catch (err) {
+        logger.warn('createEnvVar proxy failed', { error: (err as Error).message });
+        res.status(503).json({ success: false, error: { code: 'PROXY_UNAVAILABLE', message: 'Trigger.dev proxy not configured' } });
+      }
     })
   );
 
@@ -89,12 +92,13 @@ export function createEnvironmentRouter(
         return;
       }
 
-      const result = await triggerProxy.updateEnvVar(req.params.name, value.value);
-
-      res.json({
-        success: true,
-        data: result,
-      });
+      try {
+        const result = await triggerProxy.updateEnvVar(req.params.name, value.value);
+        res.json({ success: true, data: result });
+      } catch (err) {
+        logger.warn('updateEnvVar proxy failed', { error: (err as Error).message });
+        res.status(503).json({ success: false, error: { code: 'PROXY_UNAVAILABLE', message: 'Trigger.dev proxy not configured' } });
+      }
     })
   );
 
@@ -102,12 +106,13 @@ export function createEnvironmentRouter(
   router.delete(
     '/:name',
     asyncHandler(async (req: Request, res: Response) => {
-      const result = await triggerProxy.deleteEnvVar(req.params.name);
-
-      res.json({
-        success: true,
-        data: result,
-      });
+      try {
+        const result = await triggerProxy.deleteEnvVar(req.params.name);
+        res.json({ success: true, data: result });
+      } catch (err) {
+        logger.warn('deleteEnvVar proxy failed', { error: (err as Error).message });
+        res.status(503).json({ success: false, error: { code: 'PROXY_UNAVAILABLE', message: 'Trigger.dev proxy not configured' } });
+      }
     })
   );
 
@@ -128,12 +133,13 @@ export function createEnvironmentRouter(
         return;
       }
 
-      const result = await triggerProxy.importEnvVars(value.variables, value.override);
-
-      res.json({
-        success: true,
-        data: result,
-      });
+      try {
+        const result = await triggerProxy.importEnvVars(value.variables, value.override);
+        res.json({ success: true, data: result });
+      } catch (err) {
+        logger.warn('importEnvVars proxy failed', { error: (err as Error).message });
+        res.status(503).json({ success: false, error: { code: 'PROXY_UNAVAILABLE', message: 'Trigger.dev proxy not configured' } });
+      }
     })
   );
 
