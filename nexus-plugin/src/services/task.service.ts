@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { Server as SocketIOServer } from 'socket.io';
 import { TriggerProxyService, TriggerTaskOptions, BatchTriggerItem } from './trigger-proxy.service';
 import { SkillsEngineTaskHandler } from './skills-engine-task-handler';
+import { ProseCreatorTaskHandler } from './prosecreator-task-handler';
 import { syncPlatformKnowledge } from '../task-definitions/platform-knowledge-tasks';
 import { ProjectRepository, Project } from '../database/repositories/project.repository';
 import { RunRepository, CreateRunData } from '../database/repositories/run.repository';
@@ -48,9 +49,14 @@ export class TaskService {
       return this.handleSkillsEngineTask(orgId, userId, projectId, taskId, payload, options);
     }
 
-    // Platform Knowledge tasks run locally (no Trigger.dev cloud worker)
+    // Platform Knowledge tasks run locally
     if (taskId.startsWith('platform-knowledge-')) {
       return this.handlePlatformKnowledgeTask(orgId, userId, projectId, taskId, payload, options);
+    }
+
+    // ProseCreator tasks run in-process (Claude Max Proxy, no external routing)
+    if (taskId.startsWith('prosecreator-')) {
+      return this.handleProseCreatorTask(orgId, userId, projectId, taskId, payload, options);
     }
 
     const result = await this.proxy.triggerTask(taskId, payload, options);
@@ -433,6 +439,110 @@ export class TaskService {
         });
 
         logger.error('Platform knowledge sync failed', { taskId, runId: run.runId, error: err.message });
+      });
+
+    return {
+      id: triggerRunId,
+      runId: triggerRunId,
+      status: 'EXECUTING',
+      localRunId: run.runId,
+      taskId,
+    };
+  }
+
+  /**
+   * Handle ProseCreator tasks in-process — calls Claude Max Proxy directly.
+   * No external routing. Blueprint generation uses skill instructions + project data.
+   */
+  private async handleProseCreatorTask(
+    orgId: string,
+    userId: string,
+    projectId: string,
+    taskId: string,
+    payload: any,
+    options?: TriggerTaskOptions
+  ): Promise<any> {
+    const triggerRunId = `pc-${randomUUID()}`;
+    const startedAt = new Date();
+
+    const run = await this.runRepo.create({
+      triggerRunId,
+      projectId,
+      organizationId: orgId,
+      taskIdentifier: taskId,
+      status: 'EXECUTING',
+      payload,
+      startedAt,
+      idempotencyKey: options?.idempotencyKey,
+      metadata: {
+        ...options?.metadata,
+        source: 'prosecreator',
+        userId,
+        skillId: payload?.inputData?.skill_id || payload?.payload?.inputData?.skill_id,
+      },
+      tags: options?.tags || ['prosecreator'],
+    });
+
+    await this.usageRepo.record(orgId, 'task_trigger', {
+      taskId,
+      projectId,
+      runId: run.runId,
+    });
+
+    triggerTasksTriggered.inc({ task_id: taskId, organization_id: orgId });
+
+    emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+      taskId,
+      runId: run.runId,
+      triggerRunId,
+      status: 'EXECUTING',
+    });
+
+    logger.info('ProseCreator task triggered (in-process)', {
+      taskId, runId: run.runId, triggerRunId, orgId,
+    });
+
+    // Extract the actual payload (may be nested under .payload from ProseCreator)
+    const taskPayload = payload?.payload || payload;
+
+    // Run async — don't block the HTTP response
+    const handler = new ProseCreatorTaskHandler(orgId, userId);
+    handler.generateBlueprint(taskPayload)
+      .then(async (result) => {
+        await this.runRepo.updateStatus(run.runId, 'COMPLETED', {
+          blueprint: result.blueprint,
+          durationMs: result.durationMs,
+          model: result.model,
+          promptTokens: result.promptTokens,
+          completionTokens: result.completionTokens,
+        });
+
+        emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+          taskId,
+          runId: run.runId,
+          triggerRunId,
+          status: 'COMPLETED',
+          output: result.blueprint,
+        });
+
+        logger.info('ProseCreator task completed', {
+          taskId, runId: run.runId, durationMs: result.durationMs,
+          contentSize: JSON.stringify(result.blueprint).length,
+        });
+      })
+      .catch(async (err) => {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, errMsg);
+
+        emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+          taskId,
+          runId: run.runId,
+          triggerRunId,
+          status: 'FAILED',
+          error: errMsg,
+        });
+
+        logger.error('ProseCreator task failed', { taskId, runId: run.runId, error: errMsg });
       });
 
     return {
