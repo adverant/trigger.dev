@@ -107,7 +107,16 @@ export class ErrorRepository {
     );
 
     return {
-      rows,
+      rows: rows.map((row) => ({
+        id: row.run_id,
+        status: row.status,
+        startedAt: row.started_at || row.created_at,
+        duration: row.completed_at && row.started_at
+          ? new Date(row.completed_at).getTime() - new Date(row.started_at).getTime()
+          : null,
+        errorMessage: row.error_message,
+        taskIdentifier: row.task_identifier,
+      })),
       total: parseInt(countRow?.total || '0', 10),
     };
   }
