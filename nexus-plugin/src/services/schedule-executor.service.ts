@@ -112,13 +112,13 @@ export class ScheduleExecutorService {
     try {
       // Get project context for task execution
       const projects = await this.db.getPool().query(
-        'SELECT project_id, organization_id FROM trigger.projects WHERE organization_id = $1 LIMIT 1',
+        'SELECT project_id, organization_id, user_id FROM trigger.projects WHERE organization_id = $1 LIMIT 1',
         [schedule.organizationId]
       );
 
       // Fall back to any project if org-specific one not found
       const projectRow = projects.rows[0] || (await this.db.getPool().query(
-        'SELECT project_id, organization_id FROM trigger.projects LIMIT 1'
+        'SELECT project_id, organization_id, user_id FROM trigger.projects LIMIT 1'
       )).rows[0];
 
       if (!projectRow) {
@@ -129,9 +129,14 @@ export class ScheduleExecutorService {
         return;
       }
 
+      // Use project's user_id as fallback if schedule userId is non-UUID
+      const userId = schedule.userId && schedule.userId.match(/^[0-9a-f-]{36}$/i)
+        ? schedule.userId
+        : projectRow.user_id || schedule.userId;
+
       const result = await this.taskService.triggerTask(
         projectRow.organization_id,
-        schedule.userId || 'system',
+        userId,
         projectRow.project_id,
         schedule.taskIdentifier,
         { ...(schedule.payload || {}), _scheduledAt: new Date().toISOString(), _scheduleId: schedule.scheduleId }

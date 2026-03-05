@@ -685,13 +685,13 @@ class NexusTriggerServer {
     try {
       // Get first project for org context
       const projects = await this.db.getPool().query(
-        'SELECT project_id, organization_id FROM trigger.projects LIMIT 1'
+        'SELECT project_id, organization_id, user_id FROM trigger.projects LIMIT 1'
       );
       if (projects.rows.length === 0) {
         logger.warn('No projects found — skipping default schedule seeding');
         return;
       }
-      const { project_id, organization_id } = projects.rows[0];
+      const { project_id, organization_id, user_id } = projects.rows[0];
 
       // Check if platform-knowledge-sync schedule already exists
       const existing = await scheduleRepo.findByOrgId(organization_id, {
@@ -709,7 +709,7 @@ class NexusTriggerServer {
       const schedule = await scheduleRepo.create({
         projectId: project_id,
         organizationId: organization_id,
-        userId: 'system',
+        userId: user_id,
         taskIdentifier: 'platform-knowledge-sync',
         cronExpression: '0 3 * * *',
         timezone: 'UTC',
