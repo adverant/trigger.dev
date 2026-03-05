@@ -140,6 +140,8 @@ export class GraphRAGClient {
       timeout: 30000,
       headers: {
         "Content-Type": "application/json",
+        "X-Company-ID": organizationId,
+        "X-App-ID": "nexus-trigger",
         "X-Organization-ID": organizationId,
       },
     });
