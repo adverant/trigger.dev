@@ -97,6 +97,38 @@ export class DeploymentService {
   }
 
   /**
+   * Get a single deployment by ID.
+   */
+  async getDeployment(deploymentId: string, orgId: string): Promise<Deployment | null> {
+    const row = await this.repo.findById(deploymentId, orgId);
+    return row ? this.toApiDeployment(row) : null;
+  }
+
+  /**
+   * Cancel an in-progress deployment.
+   */
+  async cancelDeployment(deploymentId: string, orgId: string): Promise<Deployment> {
+    const row = await this.repo.findById(deploymentId, orgId);
+    if (!row) {
+      throw new Error('Deployment not found');
+    }
+    if (row.status !== 'deploying') {
+      throw new Error(`Cannot cancel deployment with status '${row.status}'`);
+    }
+
+    // Update status to canceled
+    await this.db.query(
+      `UPDATE trigger.deployments SET status = 'canceled', updated_at = NOW()
+       WHERE deployment_id = $1 AND organization_id = $2`,
+      [deploymentId, orgId]
+    );
+
+    logger.info('Deployment canceled', { deploymentId, orgId });
+
+    return this.toApiDeployment({ ...row, status: 'canceled' });
+  }
+
+  /**
    * Map a database row to the API-facing Deployment shape.
    */
   private toApiDeployment(row: DeploymentRow): Deployment {

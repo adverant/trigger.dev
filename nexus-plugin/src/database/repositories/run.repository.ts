@@ -256,6 +256,15 @@ export class RunRepository {
     );
   }
 
+  async updateTags(runId: string, tags: string[]): Promise<Run> {
+    const row = await this.db.queryOne<any>(
+      `UPDATE trigger.run_history SET tags = $1 WHERE run_id = $2 RETURNING *`,
+      [tags, runId]
+    );
+    if (!row) throw new Error('Run not found');
+    return this.mapRow(row);
+  }
+
   /**
    * Find Skills Engine runs stuck in EXECUTING for longer than the given threshold.
    * Used on startup to recover orphaned runs after pod restarts.

@@ -293,5 +293,83 @@ export function createRunRouter(
     })
   );
 
+  // PATCH /:runId/tags - Update run tags
+  router.patch(
+    '/:runId/tags',
+    asyncHandler(async (req: Request, res: Response) => {
+      const { tags } = req.body;
+      if (!Array.isArray(tags)) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'tags[] is required' },
+        });
+        return;
+      }
+
+      const run = await runService.updateRunTags(
+        req.user!.organizationId,
+        req.params.runId,
+        tags
+      );
+
+      res.json({
+        success: true,
+        data: toUIRun(run as Run),
+      });
+    })
+  );
+
+  // POST /bulk/cancel - Bulk cancel runs
+  router.post(
+    '/bulk/cancel',
+    asyncHandler(async (req: Request, res: Response) => {
+      const orgId = req.user!.organizationId;
+      const { runIds, filters } = req.body;
+
+      if (!runIds && !filters) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'runIds[] or filters required' },
+        });
+        return;
+      }
+
+      const result = await runService.bulkCancel(orgId, runIds, filters);
+
+      logger.info('Bulk cancel completed', { orgId, ...result });
+
+      res.json({
+        success: true,
+        data: result,
+      });
+    })
+  );
+
+  // POST /bulk/replay - Bulk replay runs
+  router.post(
+    '/bulk/replay',
+    asyncHandler(async (req: Request, res: Response) => {
+      const orgId = req.user!.organizationId;
+      const { runIds, filters } = req.body;
+
+      if (!runIds && !filters) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'runIds[] or filters required' },
+        });
+        return;
+      }
+
+      const result = await runService.bulkReplay(orgId, runIds, filters);
+
+      logger.info('Bulk replay completed', { orgId, ...result });
+
+      res.json({
+        success: true,
+        data: result,
+      });
+    })
+  );
+
   return router;
 }

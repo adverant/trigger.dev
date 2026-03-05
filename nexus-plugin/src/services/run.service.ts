@@ -185,6 +185,95 @@ export class RunService {
     };
   }
 
+  async updateRunTags(orgId: string, runId: string, tags: string[]): Promise<Run> {
+    const localRun = await this.runRepo.findById(runId, orgId);
+    if (!localRun) {
+      throw new NotFoundError('Run', runId);
+    }
+
+    const updated = await this.runRepo.updateTags(runId, tags);
+    logger.info('Run tags updated', { runId, orgId, tags });
+    return updated;
+  }
+
+  async bulkCancel(
+    orgId: string,
+    runIds?: string[],
+    filters?: Record<string, any>
+  ): Promise<{ processed: number; succeeded: number; failed: number; errors?: string[] }> {
+    let targetIds = runIds || [];
+
+    // If filters provided instead of explicit IDs, find matching runs
+    if (!runIds && filters) {
+      const result = await this.runRepo.findByOrgId(orgId, {
+        status: filters.status,
+        taskIdentifier: filters.taskIdentifier,
+        tags: filters.tags,
+        startDate: filters.from ? new Date(filters.from) : undefined,
+        endDate: filters.to ? new Date(filters.to) : undefined,
+        limit: 500,
+      });
+      targetIds = result.runs.map(r => r.runId);
+    }
+
+    // Cap at 500
+    targetIds = targetIds.slice(0, 500);
+
+    let succeeded = 0;
+    let failed = 0;
+    const errors: string[] = [];
+
+    for (const id of targetIds) {
+      try {
+        await this.cancelRun(orgId, id);
+        succeeded++;
+      } catch (err: any) {
+        failed++;
+        errors.push(`${id}: ${err.message}`);
+      }
+    }
+
+    return { processed: targetIds.length, succeeded, failed, errors: errors.length > 0 ? errors : undefined };
+  }
+
+  async bulkReplay(
+    orgId: string,
+    runIds?: string[],
+    filters?: Record<string, any>
+  ): Promise<{ processed: number; succeeded: number; failed: number; errors?: string[] }> {
+    let targetIds = runIds || [];
+
+    if (!runIds && filters) {
+      const result = await this.runRepo.findByOrgId(orgId, {
+        status: filters.status,
+        taskIdentifier: filters.taskIdentifier,
+        tags: filters.tags,
+        startDate: filters.from ? new Date(filters.from) : undefined,
+        endDate: filters.to ? new Date(filters.to) : undefined,
+        limit: 500,
+      });
+      targetIds = result.runs.map(r => r.runId);
+    }
+
+    targetIds = targetIds.slice(0, 500);
+
+    let succeeded = 0;
+    let failed = 0;
+    const errors: string[] = [];
+
+    for (const id of targetIds) {
+      try {
+        await this.replayRun(orgId, id);
+        succeeded++;
+      } catch (err: any) {
+        failed++;
+        errors.push(`${id}: ${err.message}`);
+      }
+    }
+
+    return { processed: targetIds.length, succeeded, failed, errors: errors.length > 0 ? errors : undefined };
+  }
+
   async streamRunLogs(runId: string, socket: any): Promise<void> {
     // Subscribe the socket to the run's room for real-time updates
     socket.join(`run:${runId}`);

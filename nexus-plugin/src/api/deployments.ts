@@ -70,5 +70,50 @@ export function createDeploymentRouter(
     })
   );
 
+  // GET /:deploymentId - Get deployment detail
+  router.get(
+    '/:deploymentId',
+    asyncHandler(async (req: Request, res: Response) => {
+      const deployment = await deploymentService.getDeployment(
+        req.params.deploymentId,
+        req.user!.organizationId
+      );
+
+      if (!deployment) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Deployment not found' },
+        });
+        return;
+      }
+
+      res.json({
+        success: true,
+        data: deployment,
+      });
+    })
+  );
+
+  // POST /:deploymentId/cancel - Cancel an in-progress deployment
+  router.post(
+    '/:deploymentId/cancel',
+    asyncHandler(async (req: Request, res: Response) => {
+      const result = await deploymentService.cancelDeployment(
+        req.params.deploymentId,
+        req.user!.organizationId
+      );
+
+      logger.info('Deployment canceled', {
+        deploymentId: req.params.deploymentId,
+        orgId: req.user!.organizationId,
+      });
+
+      res.json({
+        success: true,
+        data: result,
+      });
+    })
+  );
+
   return router;
 }

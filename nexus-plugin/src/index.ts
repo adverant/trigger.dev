@@ -37,6 +37,9 @@ import { createQueueRouter } from './api/queues';
 import { createIntegrationRouter } from './api/integrations';
 import { createSettingsRouter } from './api/settings';
 import { createWorkflowRouter, createJobRouter } from './api/workflows';
+import { createErrorRouter } from './api/errors';
+import { createLogRouter } from './api/logs';
+import { createBatchRouter } from './api/batches';
 
 // Import services
 import { TriggerProxyService } from './services/trigger-proxy.service';
@@ -63,6 +66,9 @@ import { UsageRepository } from './database/repositories/usage.repository';
 import { TaskDefinitionRepository } from './database/repositories/task-definition.repository';
 import { TaskTemplateRepository } from './database/repositories/task-template.repository';
 import { WorkflowRepository } from './database/repositories/workflow.repository';
+import { ErrorRepository } from './database/repositories/error.repository';
+import { LogRepository } from './database/repositories/log.repository';
+import { BatchRepository } from './database/repositories/batch.repository';
 
 // Import Trigger.dev client factory
 import { createTriggerClients } from './config/trigger-client';
@@ -159,6 +165,9 @@ class NexusTriggerServer {
       const usageRepo = new UsageRepository(this.db);
       const taskDefRepo = new TaskDefinitionRepository(this.db);
       const taskTemplateRepo = new TaskTemplateRepository(this.db);
+      const errorRepo = new ErrorRepository(this.db);
+      const logRepo = new LogRepository(this.db);
+      const batchRepo = new BatchRepository(this.db);
 
       // Initialize Trigger.dev SDK and Management API client
       const triggerClients = createTriggerClients(this.config.trigger);
@@ -235,7 +244,10 @@ class NexusTriggerServer {
         taskTemplateRepo,
         this.clientRegistry,
         projectRepo,
-        workflowService
+        workflowService,
+        errorRepo,
+        logRepo,
+        batchRepo
       );
 
       // Serve UI static files
@@ -473,7 +485,10 @@ class NexusTriggerServer {
     taskTemplateRepo: TaskTemplateRepository,
     clientRegistry: ServiceClientRegistry,
     projectRepo: ProjectRepository,
-    workflowService: WorkflowService
+    workflowService: WorkflowService,
+    errorRepo: ErrorRepository,
+    logRepo: LogRepository,
+    batchRepo: BatchRepository
   ): void {
     const apiRouter = express.Router();
 
@@ -504,6 +519,9 @@ class NexusTriggerServer {
     apiRouter.use('/settings', createSettingsRouter(this.db));
     apiRouter.use('/workflows', createWorkflowRouter(workflowService, this.io));
     apiRouter.use('/jobs', createJobRouter(workflowService));
+    apiRouter.use('/errors', createErrorRouter(errorRepo));
+    apiRouter.use('/logs', createLogRouter(logRepo));
+    apiRouter.use('/batches', createBatchRouter(batchRepo, taskService, runService));
 
     // Internal service-to-service webhook (no JWT, service-key auth only)
     // Used by nexus-plugins to trigger platform-knowledge-refresh on plugin changes
