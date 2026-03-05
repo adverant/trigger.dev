@@ -223,6 +223,7 @@ export class RunRepository {
 
     if (terminalStatuses.includes(status)) {
       setClauses.push(`completed_at = NOW()`);
+      setClauses.push(`duration_ms = EXTRACT(EPOCH FROM (NOW() - COALESCE(started_at, created_at))) * 1000`);
     }
 
     if (status === 'EXECUTING') {
