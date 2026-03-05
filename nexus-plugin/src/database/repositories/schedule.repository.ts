@@ -53,6 +53,7 @@ export interface UpdateScheduleData {
 
 export interface ScheduleFilters {
   taskIdentifier?: string;
+  projectId?: string;
   enabled?: boolean;
   limit?: number;
   offset?: number;
@@ -113,6 +114,11 @@ export class ScheduleRepository {
     if (filters.taskIdentifier) {
       conditions.push(`task_identifier = $${paramIndex++}`);
       values.push(filters.taskIdentifier);
+    }
+
+    if (filters.projectId) {
+      conditions.push(`project_id = $${paramIndex++}`);
+      values.push(filters.projectId);
     }
 
     if (filters.enabled !== undefined) {

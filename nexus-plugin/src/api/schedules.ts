@@ -11,6 +11,15 @@ const logger = createLogger({ component: 'api-schedules' });
 /**
  * Transform backend Schedule to the format the UI expects.
  */
+function safeISOString(value: any): string | null {
+  if (!value) return null;
+  try {
+    return new Date(value).toISOString();
+  } catch {
+    return null;
+  }
+}
+
 function toUISchedule(schedule: any): Record<string, any> {
   return {
     id: schedule.scheduleId,
@@ -20,21 +29,16 @@ function toUISchedule(schedule: any): Record<string, any> {
     enabled: schedule.enabled,
     payload: schedule.payload,
     lastRunId: null,
-    lastRunAt: schedule.lastRunAt
-      ? (schedule.lastRunAt.toISOString?.() ?? String(schedule.lastRunAt))
-      : null,
-    nextRunAt: schedule.nextRunAt
-      ? (schedule.nextRunAt.toISOString?.() ?? String(schedule.nextRunAt))
-      : null,
+    lastRunAt: safeISOString(schedule.lastRunAt),
+    nextRunAt: safeISOString(schedule.nextRunAt),
     health: schedule.enabled
       ? (schedule.lastStatus === 'FAILED' ? 'unhealthy' : 'healthy')
       : 'unknown',
-    createdAt: schedule.createdAt
-      ? (schedule.createdAt.toISOString?.() ?? String(schedule.createdAt))
-      : new Date().toISOString(),
-    updatedAt: schedule.updatedAt
-      ? (schedule.updatedAt.toISOString?.() ?? String(schedule.updatedAt))
-      : new Date().toISOString(),
+    runCount: schedule.runCount ?? 0,
+    successCount: schedule.successCount ?? 0,
+    failureCount: schedule.failureCount ?? 0,
+    createdAt: safeISOString(schedule.createdAt) || new Date().toISOString(),
+    updatedAt: safeISOString(schedule.updatedAt) || new Date().toISOString(),
   };
 }
 

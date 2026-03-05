@@ -3,6 +3,7 @@ import { ScheduleRepository, Schedule, CreateScheduleData, UpdateScheduleData } 
 import { UsageRepository } from '../database/repositories/usage.repository';
 import { WS_EVENTS } from '../websocket/events';
 import { emitToOrg } from '../websocket/socket-server';
+import { getNextCronRuns } from '../utils/cron-next-run';
 import { createLogger } from '../utils/logger';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import type { ScheduleExecutorService } from './schedule-executor.service';
@@ -43,8 +44,8 @@ export class ScheduleService {
       throw new ValidationError(`Invalid cron expression: ${data.cron}`);
     }
 
-    // Calculate next run time locally
-    const nextRuns = this.getNextExecutions(data.cron, data.timezone || 'UTC', 1);
+    // Calculate next run time using shared timezone-aware utility
+    const nextRuns = getNextCronRuns(data.cron, data.timezone || 'UTC', 1);
     const nextRunAt = nextRuns.length > 0 ? nextRuns[0] : undefined;
 
     // Store in database (no cloud proxy needed)
@@ -91,7 +92,9 @@ export class ScheduleService {
   }
 
   async listSchedules(orgId: string, projectId?: string): Promise<Schedule[]> {
-    return this.scheduleRepo.findByOrgId(orgId, {});
+    return this.scheduleRepo.findByOrgId(orgId, {
+      projectId: projectId || undefined,
+    });
   }
 
   async updateSchedule(
@@ -126,7 +129,7 @@ export class ScheduleService {
     if (data.cron || data.timezone) {
       const cronExpr = data.cron || existing.cronExpression;
       const tz = data.timezone || existing.timezone;
-      const nextRuns = this.getNextExecutions(cronExpr, tz, 1);
+      const nextRuns = getNextCronRuns(cronExpr, tz, 1);
       if (nextRuns.length > 0) {
         updateData.nextRunAt = nextRuns[0];
       }
@@ -205,65 +208,15 @@ export class ScheduleService {
     return updated;
   }
 
+  /**
+   * Public utility for the /next-executions API endpoint.
+   * Uses the shared timezone-aware cron calculator.
+   */
   getNextExecutions(
     cronExpression: string,
     timezone: string,
     count: number = 5
   ): Date[] {
-    const results: Date[] = [];
-    const parts = cronExpression.split(/\s+/);
-    if (parts.length !== 5) return results;
-
-    const now = new Date();
-    let current = new Date(now.getTime());
-
-    const maxIterations = 525600; // 1 year of minutes
-    for (let i = 0; i < maxIterations && results.length < count; i++) {
-      current = new Date(current.getTime() + 60000);
-      if (this.matchesCron(current, parts)) {
-        results.push(new Date(current));
-      }
-    }
-
-    return results;
-  }
-
-  private matchesCron(date: Date, parts: string[]): boolean {
-    const minute = date.getMinutes();
-    const hour = date.getHours();
-    const dayOfMonth = date.getDate();
-    const month = date.getMonth() + 1;
-    const dayOfWeek = date.getDay();
-
-    return (
-      this.matchesCronField(minute, parts[0], 0, 59) &&
-      this.matchesCronField(hour, parts[1], 0, 23) &&
-      this.matchesCronField(dayOfMonth, parts[2], 1, 31) &&
-      this.matchesCronField(month, parts[3], 1, 12) &&
-      this.matchesCronField(dayOfWeek, parts[4], 0, 6)
-    );
-  }
-
-  private matchesCronField(value: number, field: string, min: number, max: number): boolean {
-    if (field === '*') return true;
-
-    const segments = field.split(',');
-    for (const segment of segments) {
-      if (segment.includes('/')) {
-        const [rangeStr, stepStr] = segment.split('/');
-        const step = parseInt(stepStr, 10);
-        const start = rangeStr === '*' ? min : parseInt(rangeStr, 10);
-        if ((value - start) >= 0 && (value - start) % step === 0) return true;
-      } else if (segment.includes('-')) {
-        const [startStr, endStr] = segment.split('-');
-        const start = parseInt(startStr, 10);
-        const end = parseInt(endStr, 10);
-        if (value >= start && value <= end) return true;
-      } else {
-        if (parseInt(segment, 10) === value) return true;
-      }
-    }
-
-    return false;
+    return getNextCronRuns(cronExpression, timezone, count);
   }
 }

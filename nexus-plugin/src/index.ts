@@ -195,7 +195,7 @@ class NexusTriggerServer {
 
       // Create in-process schedule executor (local cron engine — no Trigger.dev cloud needed)
       this.scheduleExecutor = new ScheduleExecutorService(
-        scheduleRepo, taskService, this.io, this.db
+        scheduleRepo, taskService, this.io, this.db, this.redis
       );
       scheduleService.setExecutor(this.scheduleExecutor);
       const waitpointService = new WaitpointService(triggerProxy, waitpointRepo, usageRepo, this.io);
@@ -210,7 +210,7 @@ class NexusTriggerServer {
         runRepo
       );
       const workflowService = new WorkflowService(workflowRepo, this.io, workflowExecutor);
-      this.syncService = new SyncService(triggerProxy, runRepo, scheduleRepo);
+      this.syncService = new SyncService(triggerProxy, runRepo);
 
       // Setup middleware
       this.setupMiddleware();

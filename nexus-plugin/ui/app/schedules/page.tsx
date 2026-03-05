@@ -9,6 +9,8 @@ import {
   CalendarClock,
   X,
   Clock,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react';
 import { useTriggerApi, Schedule, Task } from '@/hooks/useTriggerApi';
 import StatusBadge from '@/components/common/StatusBadge';
@@ -235,7 +237,9 @@ export default function SchedulesPage() {
         <div className="space-y-3">
           {schedules.map((schedule) => {
             const task = tasks.find((t) => t.id === schedule.taskId);
-            const nextExecs = computeNextExecutions(schedule.cron, 3);
+            const runCount = schedule.runCount ?? 0;
+            const successCount = schedule.successCount ?? 0;
+            const failureCount = schedule.failureCount ?? 0;
 
             return (
               <div key={schedule.id} className="card">
@@ -272,21 +276,42 @@ export default function SchedulesPage() {
                         <span>{schedule.timezone}</span>
                       </div>
 
-                      {/* Next executions */}
-                      {schedule.enabled && nextExecs.length > 0 && (
+                      {/* Next run from backend (timezone-aware) */}
+                      {schedule.enabled && schedule.nextRunAt && (
                         <div className="mt-2 flex items-center gap-1.5">
                           <Clock className="h-3 w-3 text-slate-600" />
                           <span className="text-xs text-slate-500">
-                            Next: {nextExecs.map((d) => format(d, 'HH:mm')).join(', ')}
+                            Next: {format(new Date(schedule.nextRunAt), 'MMM d, HH:mm')}
                           </span>
                         </div>
                       )}
 
-                      {schedule.lastRunAt && (
-                        <p className="text-xs text-slate-500 mt-1">
-                          Last run: {format(new Date(schedule.lastRunAt), 'MMM d, HH:mm:ss')}
-                        </p>
-                      )}
+                      <div className="flex items-center gap-3 mt-1.5">
+                        {schedule.lastRunAt && (
+                          <p className="text-xs text-slate-500">
+                            Last run: {format(new Date(schedule.lastRunAt), 'MMM d, HH:mm:ss')}
+                          </p>
+                        )}
+
+                        {/* Run counts */}
+                        {runCount > 0 && (
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="text-slate-500">{runCount} runs</span>
+                            {successCount > 0 && (
+                              <span className="flex items-center gap-0.5 text-emerald-400">
+                                <CheckCircle2 className="h-3 w-3" />
+                                {successCount}
+                              </span>
+                            )}
+                            {failureCount > 0 && (
+                              <span className="flex items-center gap-0.5 text-red-400">
+                                <XCircle className="h-3 w-3" />
+                                {failureCount}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
 

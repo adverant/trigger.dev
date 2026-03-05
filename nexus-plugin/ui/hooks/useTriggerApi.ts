@@ -101,6 +101,9 @@ export interface Schedule {
   lastRunAt?: string;
   nextRunAt?: string;
   health: string;
+  runCount?: number;
+  successCount?: number;
+  failureCount?: number;
   createdAt: string;
   updatedAt: string;
 }
