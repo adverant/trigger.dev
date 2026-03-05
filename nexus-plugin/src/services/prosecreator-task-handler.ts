@@ -31,7 +31,7 @@ export class ProseCreatorTaskHandler {
     this.proxyUrl = process.env.CLAUDE_CODE_PROXY_URL
       || process.env.LLM_CLAUDE_CODE_PROXY_URL
       || 'http://claude-code-proxy.nexus.svc.cluster.local:3100';
-    this.model = process.env.CLAUDE_BLUEPRINT_MODEL || 'claude-opus-4-6-20260206';
+    this.model = process.env.CLAUDE_BLUEPRINT_MODEL || 'claude-opus-4-6';
   }
 
   /**
