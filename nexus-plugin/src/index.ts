@@ -560,6 +560,49 @@ class NexusTriggerServer {
       }
     });
 
+    // Internal run status endpoint (service-key auth, no JWT required)
+    // Used by nexus-prosecreator to poll forge job run status
+    this.app.get('/trigger/internal/runs/:runId', async (req, res) => {
+      const serviceKey = req.headers['x-service-key'] as string;
+      const expectedKey = process.env.INTERNAL_SERVICE_KEY;
+
+      if (!expectedKey || serviceKey !== expectedKey) {
+        return res.status(401).json({ error: 'Invalid service key' });
+      }
+
+      const { runId } = req.params;
+
+      try {
+        // Direct DB lookup without orgId — trusted service-to-service call
+        const row = await this.db.getPool().query(
+          `SELECT run_id, task_identifier, status, output, error_message,
+                  started_at, completed_at, duration_ms, payload
+           FROM trigger.run_history WHERE run_id = $1`,
+          [runId]
+        );
+
+        if (row.rows.length === 0) {
+          return res.status(404).json({ error: 'Run not found' });
+        }
+
+        const run = row.rows[0];
+        res.json({
+          id: run.run_id,
+          taskId: run.task_identifier,
+          status: run.status,
+          output: run.output,
+          error: run.error_message,
+          errorMessage: run.error_message,
+          startedAt: run.started_at,
+          completedAt: run.completed_at,
+          durationMs: run.duration_ms,
+        });
+      } catch (err: any) {
+        logger.error('Internal run status lookup failed', { runId, error: err.message });
+        res.status(500).json({ error: err.message });
+      }
+    });
+
     this.app.use('/trigger/api/v1', apiRouter);
 
     logger.info('API routes mounted at /trigger/api/v1');
