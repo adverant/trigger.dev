@@ -21,6 +21,7 @@ import {
   WorkflowRun,
 } from '../database/repositories/workflow.repository';
 import { RunRepository } from '../database/repositories/run.repository';
+import { LogRepository } from '../database/repositories/log.repository';
 import { TriggerProxyService } from './trigger-proxy.service';
 import { ServiceClientRegistry } from './client-registry';
 import { evaluateCondition, evaluateTransform } from './expression-evaluator';
@@ -75,7 +76,8 @@ export class WorkflowExecutor {
     private triggerProxy: TriggerProxyService,
     private clientRegistry: ServiceClientRegistry,
     private io: SocketIOServer,
-    private runRepo?: RunRepository
+    private runRepo?: RunRepository,
+    private logRepo?: LogRepository
   ) {}
 
   /**
@@ -669,6 +671,21 @@ export class WorkflowExecutor {
         metadata: { workflowRunId: run.runId, workflowId: run.workflowId },
         tags: ['workflow'],
       });
+      // Write structured log entry for the workflow run
+      if (this.logRepo) {
+        const taskId = `workflow:${run.workflowId}`;
+        this.logRepo.create({
+          runId: `wf_${run.runId}`,
+          organizationId: run.organizationId,
+          taskIdentifier: taskId,
+          level: status === 'FAILED' ? 'ERROR' : 'INFO',
+          message: status === 'FAILED'
+            ? `Workflow ${status}: ${details.errorMessage || 'Unknown error'}`
+            : `Workflow ${status}`,
+          data: { workflowRunId: run.runId, durationMs: details.durationMs },
+        }).catch(() => {});
+      }
+
       logger.debug('Bridged workflow run to run_history', { runId: run.runId });
     } catch (err) {
       logger.warn('Failed to bridge workflow run to run_history', {

@@ -189,6 +189,9 @@ class NexusTriggerServer {
 
       // Initialize services (match actual constructor signatures)
       const projectService = new ProjectService(projectRepo, usageRepo);
+      // Wire logRepo into RunStreamManager (created before DB init)
+      this.runStreamManager.setLogRepo(logRepo);
+
       const taskService = new TaskService(
         triggerProxy,
         projectRepo,
@@ -197,7 +200,8 @@ class NexusTriggerServer {
         usageRepo,
         this.config.nexus,
         this.io,
-        this.runStreamManager
+        this.runStreamManager,
+        logRepo
       );
       const runService = new RunService(triggerProxy, runRepo, this.io);
       const scheduleService = new ScheduleService(scheduleRepo, usageRepo, this.io);
@@ -216,10 +220,11 @@ class NexusTriggerServer {
         triggerProxy,
         this.clientRegistry,
         this.io,
-        runRepo
+        runRepo,
+        logRepo
       );
       const workflowService = new WorkflowService(workflowRepo, this.io, workflowExecutor);
-      this.syncService = new SyncService(triggerProxy, runRepo);
+      this.syncService = new SyncService(triggerProxy, runRepo, logRepo);
 
       // Setup middleware
       this.setupMiddleware();

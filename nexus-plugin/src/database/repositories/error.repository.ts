@@ -15,7 +15,7 @@ export interface ErrorTimelineEntry {
   count: number;
 }
 
-const ERROR_STATUSES = `('FAILED', 'CRASHED', 'SYSTEM_FAILURE', 'TIMED_OUT')`;
+const ERROR_STATUSES = `('FAILED', 'CRASHED', 'SYSTEM_FAILURE', 'TIMED_OUT', 'INTERRUPTED', 'EXPIRED')`;
 
 export class ErrorRepository {
   constructor(private db: DatabaseService) {}

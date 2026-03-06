@@ -2,6 +2,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import axios, { AxiosInstance } from 'axios';
 import { WS_EVENTS } from './events';
 import { emitToOrg, emitToRun } from './socket-server';
+import { LogRepository } from '../database/repositories/log.repository';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger({ service: 'nexus-trigger', component: 'run-stream' });
@@ -10,6 +11,7 @@ interface RunStreamConfig {
   triggerApiUrl: string;
   triggerSecretKey: string;
   pollIntervalMs: number;
+  logRepo?: LogRepository;
 }
 
 interface TrackedRun {
@@ -35,10 +37,12 @@ export class RunStreamManager {
   private pollInterval: NodeJS.Timeout | null = null;
   private pollIntervalMs: number;
   private isRunning = false;
+  private logRepo?: LogRepository;
 
   constructor(io: SocketIOServer, config: RunStreamConfig) {
     this.io = io;
     this.pollIntervalMs = config.pollIntervalMs || 3000;
+    this.logRepo = config.logRepo;
     this.apiClient = axios.create({
       baseURL: config.triggerApiUrl,
       headers: {
@@ -47,6 +51,11 @@ export class RunStreamManager {
       },
       timeout: 10000,
     });
+  }
+
+  /** Set the log repository (called after DB init). */
+  setLogRepo(repo: LogRepository): void {
+    this.logRepo = repo;
   }
 
   /**
@@ -195,6 +204,21 @@ export class RunStreamManager {
           }
 
           tracked.lastStatus = newStatus;
+
+          // Write structured log for terminal status changes
+          if (terminalStatuses.has(newStatus) && this.logRepo) {
+            const isError = newStatus !== 'COMPLETED' && newStatus !== 'CANCELED';
+            this.logRepo.create({
+              runId: tracked.runId,
+              organizationId: tracked.orgId,
+              taskIdentifier: tracked.taskIdentifier,
+              level: isError ? 'ERROR' : 'INFO',
+              message: isError
+                ? `Run ${newStatus}: ${runData.error?.message || 'No error details'}`
+                : `Run ${newStatus}`,
+              data: { durationMs, triggerRunId },
+            }).catch(() => {});
+          }
 
           logger.debug('Run status changed', {
             triggerRunId,

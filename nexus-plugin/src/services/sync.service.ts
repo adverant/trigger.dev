@@ -1,8 +1,18 @@
 import { TriggerProxyService } from './trigger-proxy.service';
 import { RunRepository, RunStatus } from '../database/repositories/run.repository';
+import { LogRepository } from '../database/repositories/log.repository';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger({ component: 'sync-service' });
+
+const TERMINAL_STATUSES = new Set([
+  'COMPLETED', 'CANCELED', 'FAILED', 'CRASHED',
+  'SYSTEM_FAILURE', 'EXPIRED', 'TIMED_OUT', 'INTERRUPTED',
+]);
+
+const ERROR_STATUSES = new Set([
+  'FAILED', 'CRASHED', 'SYSTEM_FAILURE', 'EXPIRED', 'TIMED_OUT', 'INTERRUPTED',
+]);
 
 export class SyncService {
   private syncInterval: NodeJS.Timeout | null = null;
@@ -10,7 +20,8 @@ export class SyncService {
 
   constructor(
     private proxy: TriggerProxyService,
-    private runRepo: RunRepository
+    private runRepo: RunRepository,
+    private logRepo?: LogRepository
   ) {}
 
   async syncRuns(orgId: string, projectId: string): Promise<{ synced: number; errors: number }> {
@@ -36,15 +47,33 @@ export class SyncService {
                 triggerRun.output,
                 triggerRun.error?.message
               );
+
+              // Write log entry for terminal status transitions
+              if (TERMINAL_STATUSES.has(triggerRun.status) && this.logRepo) {
+                const taskId = existing.taskIdentifier || 'unknown';
+                const isError = ERROR_STATUSES.has(triggerRun.status);
+                this.logRepo.create({
+                  runId: existing.runId,
+                  organizationId: orgId,
+                  taskIdentifier: taskId,
+                  level: isError ? 'ERROR' : 'INFO',
+                  message: isError
+                    ? `Run ${triggerRun.status}: ${triggerRun.error?.message || 'No error message'}`
+                    : `Run ${triggerRun.status}`,
+                  data: { previousStatus: existing.status, durationMs: triggerRun.durationMs },
+                }).catch(() => {});
+              }
+
               synced++;
             }
           } else {
             // Create new local record
+            const taskId = triggerRun.taskIdentifier || triggerRun.task || 'unknown';
             await this.runRepo.create({
               triggerRunId,
               projectId,
               organizationId: orgId,
-              taskIdentifier: triggerRun.taskIdentifier || triggerRun.task || 'unknown',
+              taskIdentifier: taskId,
               status: triggerRun.status as RunStatus,
               payload: triggerRun.payload,
               output: triggerRun.output,
@@ -54,6 +83,22 @@ export class SyncService {
               durationMs: triggerRun.durationMs,
               tags: triggerRun.tags || [],
             });
+
+            // Write log for newly discovered runs already in terminal state
+            if (TERMINAL_STATUSES.has(triggerRun.status) && this.logRepo) {
+              const isError = ERROR_STATUSES.has(triggerRun.status);
+              this.logRepo.create({
+                runId: triggerRunId,
+                organizationId: orgId,
+                taskIdentifier: taskId,
+                level: isError ? 'ERROR' : 'INFO',
+                message: isError
+                  ? `Run ${triggerRun.status}: ${triggerRun.error?.message || 'No error message'}`
+                  : `Run ${triggerRun.status}`,
+                data: { syncDiscovered: true, durationMs: triggerRun.durationMs },
+              }).catch(() => {});
+            }
+
             synced++;
           }
         } catch (err: any) {

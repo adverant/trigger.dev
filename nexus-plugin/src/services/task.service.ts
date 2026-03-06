@@ -9,6 +9,7 @@ import { ProjectRepository, Project } from '../database/repositories/project.rep
 import { RunRepository, CreateRunData } from '../database/repositories/run.repository';
 import { TaskDefinitionRepository, UpsertTaskDefinitionData } from '../database/repositories/task-definition.repository';
 import { UsageRepository } from '../database/repositories/usage.repository';
+import { LogRepository } from '../database/repositories/log.repository';
 import { NexusConfig } from '../config';
 import { WS_EVENTS } from '../websocket/events';
 import { emitToOrg } from '../websocket/socket-server';
@@ -28,8 +29,24 @@ export class TaskService {
     private usageRepo: UsageRepository,
     private nexusConfig: NexusConfig,
     private io: SocketIOServer,
-    private runStreamManager: RunStreamManager
+    private runStreamManager: RunStreamManager,
+    private logRepo?: LogRepository
   ) {}
+
+  /** Write a structured log entry (fire-and-forget, never blocks callers). */
+  private writeLog(
+    orgId: string,
+    runId: string,
+    taskIdentifier: string,
+    level: 'TRACE' | 'DEBUG' | 'INFO' | 'WARN' | 'ERROR',
+    message: string,
+    data?: Record<string, any>
+  ): void {
+    if (!this.logRepo) return;
+    this.logRepo.create({ runId, organizationId: orgId, taskIdentifier, level, message, data }).catch((err) => {
+      logger.warn('Failed to write run log', { runId, error: err.message });
+    });
+  }
 
   async triggerTask(
     orgId: string,
@@ -99,6 +116,8 @@ export class TaskService {
       logger.warn('GraphRAG storage failed (non-blocking)', { error: err.message });
     });
 
+    this.writeLog(orgId, run.runId, taskId, 'INFO', `Task triggered: ${taskId}`, { triggerRunId, projectId });
+
     logger.info('Task triggered', {
       taskId,
       runId: run.runId,
@@ -163,6 +182,8 @@ export class TaskService {
       status: 'EXECUTING',
     });
 
+    this.writeLog(orgId, run.runId, taskId, 'INFO', `Skills Engine task triggered: ${taskId}`, { triggerRunId });
+
     logger.info('Skills Engine task triggered', { taskId, runId: run.runId, triggerRunId, orgId });
 
     const handler = new SkillsEngineTaskHandler(orgId, userId);
@@ -186,6 +207,7 @@ export class TaskService {
       // If the sync start call fails, update run to FAILED and return error
       logger.error('Skills Engine start failed', { taskId, error: err.message, runId: run.runId });
       await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, err.message);
+      this.writeLog(orgId, run.runId, taskId, 'ERROR', `Skills Engine start failed: ${err.message}`);
 
       emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
         taskId,
@@ -283,9 +305,12 @@ export class TaskService {
 
       this.storeInGraphRAG(orgId, userId, taskId, { jobId, operationId }, result).catch(() => {});
 
+      this.writeLog(orgId, runId, taskId, 'INFO', `Skills Engine task completed`, { skillEntityId: result.skillEntityId, jobId: result.jobId });
+
       logger.info('Skills Engine task completed', { taskId, runId, skillEntityId: result.skillEntityId });
     } catch (error: any) {
       await this.runRepo.updateStatus(runId, 'FAILED', undefined, error.message);
+      this.writeLog(orgId, runId, taskId, 'ERROR', `Skills Engine task failed: ${error.message}`);
 
       emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
         taskId,
@@ -338,9 +363,12 @@ export class TaskService {
         output: { total: result.total, skipped: result.skipped.length },
       });
 
+      this.writeLog(orgId, runId, taskId, 'INFO', `Batch regeneration completed`, { total: result.total, skipped: result.skipped.length });
+
       logger.info('Skills Engine batch regeneration completed', { taskId, runId, total: result.total });
     } catch (error: any) {
       await this.runRepo.updateStatus(runId, 'FAILED', undefined, error.message);
+      this.writeLog(orgId, runId, taskId, 'ERROR', `Batch regeneration failed: ${error.message}`);
 
       emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
         taskId,
@@ -420,6 +448,8 @@ export class TaskService {
           },
         });
 
+        this.writeLog(orgId, run.runId, taskId, 'INFO', `Platform knowledge sync completed`, { plugins: result.pluginsCatalogued, skills: result.skillsCatalogued, durationMs: result.durationMs });
+
         logger.info('Platform knowledge sync completed', {
           taskId,
           runId: run.runId,
@@ -430,6 +460,7 @@ export class TaskService {
       })
       .catch(async (err) => {
         await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, err.message);
+        this.writeLog(orgId, run.runId, taskId, 'ERROR', `Platform knowledge sync failed: ${err.message}`);
 
         emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
           taskId,
@@ -514,6 +545,8 @@ export class TaskService {
       status: 'EXECUTING',
     });
 
+    this.writeLog(orgId, run.runId, taskId, 'INFO', `ProseCreator task triggered: ${taskId}`, { triggerRunId });
+
     logger.info('ProseCreator task triggered (in-process)', {
       taskId, runId: run.runId, triggerRunId, orgId,
     });
@@ -541,6 +574,8 @@ export class TaskService {
           output: result.blueprint,
         });
 
+        this.writeLog(orgId, run.runId, taskId, 'INFO', `ProseCreator task completed`, { durationMs: result.durationMs, model: result.model });
+
         logger.info('ProseCreator task completed', {
           taskId, runId: run.runId, durationMs: result.durationMs,
           contentSize: JSON.stringify(result.blueprint).length,
@@ -549,6 +584,7 @@ export class TaskService {
       .catch(async (err) => {
         const errMsg = err instanceof Error ? err.message : String(err);
         await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, errMsg);
+        this.writeLog(orgId, run.runId, taskId, 'ERROR', `ProseCreator task failed: ${errMsg}`);
 
         emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
           taskId,
@@ -609,6 +645,8 @@ export class TaskService {
       batchId: result.batchId || result.id,
       taskIdentifiers: items.map((i) => i.taskIdentifier),
     });
+
+    this.writeLog(orgId, result.batchId || 'batch', items[0]?.taskIdentifier || 'batch', 'INFO', `Batch triggered: ${items.length} items`, { projectId, taskIdentifiers: items.map(i => i.taskIdentifier) });
 
     logger.info('Batch triggered', {
       orgId,
@@ -692,6 +730,7 @@ export class TaskService {
           // No jobId means startGeneration never returned — mark as failed
           logger.warn('Orphaned run has no jobId, marking as FAILED', { runId: run.runId });
           await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, 'Orphaned: no jobId (pod restarted before Skills Engine responded)');
+          this.writeLog(run.organizationId, run.runId, run.taskIdentifier, 'ERROR', 'Orphaned run: no jobId (pod restarted)');
           recovered++;
           continue;
         }
