@@ -10,6 +10,7 @@ import type { UpsertTaskDefinitionData } from '../database/repositories/task-def
 import { SKILLS_ENGINE_TASKS } from './skills-engine-tasks';
 import { PLATFORM_KNOWLEDGE_TASKS } from './platform-knowledge-tasks';
 import { PLATFORM_HEALTH_TASKS } from './platform-health-tasks';
+import { TRANSCRIPT_EXTRACTION_TASKS } from './transcript-extraction-tasks';
 
 export interface TaskRegistryEntry {
   taskIdentifier: string;
@@ -427,6 +428,9 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
 
   // ── Platform Health Monitor (2) ─────────────────────────────────
   ...PLATFORM_HEALTH_TASKS,
+
+  // ── Transcript Extraction (1) ───────────────────────────────────────
+  ...TRANSCRIPT_EXTRACTION_TASKS,
 ];
 
 /**
