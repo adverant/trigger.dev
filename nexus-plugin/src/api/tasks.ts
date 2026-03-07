@@ -8,6 +8,27 @@ import { createLogger } from '../utils/logger';
 const logger = createLogger({ component: 'api-tasks' });
 
 /**
+ * Derive the execution engine name from a task identifier prefix.
+ */
+function deriveEngine(taskIdentifier: string): string {
+  if (taskIdentifier.startsWith('prosecreator-')) return 'Claude Max Proxy';
+  if (taskIdentifier.startsWith('skills-engine-')) return 'Skills Engine';
+  if (taskIdentifier.startsWith('graphrag-')) return 'GraphRAG';
+  if (taskIdentifier.startsWith('mageagent-')) return 'MageAgent';
+  if (taskIdentifier.startsWith('n8n-')) return 'n8n Workflow Engine';
+  if (taskIdentifier.startsWith('ee-design/')) return 'EE Design Partner';
+  if (taskIdentifier.startsWith('jupyter-')) return 'Jupyter Notebook';
+  if (taskIdentifier.startsWith('gpu-')) return 'GPU Bridge';
+  if (taskIdentifier.startsWith('cvat-')) return 'CVAT Annotation';
+  if (taskIdentifier.startsWith('fileprocess-')) return 'FileProcess Pipeline';
+  if (taskIdentifier.startsWith('learningagent-')) return 'Learning Agent';
+  if (taskIdentifier.startsWith('geoagent-')) return 'GeoAgent';
+  if (taskIdentifier.startsWith('platform-knowledge-')) return 'Platform Knowledge Sync';
+  if (taskIdentifier.startsWith('sandbox-')) return 'Sandbox';
+  return 'Trigger.dev Cloud';
+}
+
+/**
  * Transform backend TaskDefinition to the format the UI expects.
  */
 function toUITask(task: any): Record<string, any> {
@@ -33,6 +54,9 @@ function toUITask(task: any): Record<string, any> {
     nexusIntegration: task.nexusService || undefined,
     lastRunStatus: task.lastRunStatus || undefined,
     lastRunAt: task.lastRunAt ? (task.lastRunAt.toISOString?.() ?? String(task.lastRunAt)) : undefined,
+    executionEngine: deriveEngine(task.taskIdentifier || task.slug || ''),
+    executionType: task.executionType || 'prefix-derived',
+    executionTarget: task.executionTarget || {},
     createdAt: task.createdAt ? (task.createdAt.toISOString?.() ?? String(task.createdAt)) : new Date().toISOString(),
     updatedAt: task.updatedAt ? (task.updatedAt.toISOString?.() ?? String(task.updatedAt)) : new Date().toISOString(),
   };
@@ -213,6 +237,54 @@ export function createTaskRouter(
       res.status(201).json({
         success: true,
         data: result,
+      });
+    })
+  );
+
+  // PUT /:taskId/execution-target - Update execution target config
+  router.put(
+    '/:taskId/execution-target',
+    asyncHandler(async (req: Request, res: Response) => {
+      const updateSchema = Joi.object({
+        executionType: Joi.string().valid(
+          'prefix-derived', 'skill', 'n8n-workflow', 'code-handler', 'mageagent-prompt', 'external-webhook'
+        ).required(),
+        executionTarget: Joi.object().required(),
+      });
+
+      const { error, value } = updateSchema.validate(req.body, { abortEarly: false });
+      if (error) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Invalid request body',
+            details: error.details.map((d: any) => d.message),
+          },
+        });
+        return;
+      }
+
+      const updated = await taskService.updateExecutionTarget(
+        req.user!.organizationId,
+        req.params.taskId,
+        value.executionType,
+        value.executionTarget
+      );
+
+      if (!updated) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Task not found' },
+        });
+        return;
+      }
+
+      logger.info('Updated execution target', { taskId: req.params.taskId, executionType: value.executionType });
+
+      res.json({
+        success: true,
+        data: toUITask(updated),
       });
     })
   );

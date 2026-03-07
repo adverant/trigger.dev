@@ -13,6 +13,8 @@ export interface TaskDefinition {
   machinePreset: string | null;
   isNexusIntegration: boolean;
   nexusService: string | null;
+  executionType: string;
+  executionTarget: Record<string, unknown>;
   lastRunStatus: string | null;
   lastRunAt: Date | null;
   createdAt: Date;
@@ -135,6 +137,23 @@ export class TaskDefinitionRepository {
     return row ? this.mapRow(row) : null;
   }
 
+  async findBySlug(taskIdentifier: string, organizationId: string): Promise<TaskDefinition | null> {
+    const row = await this.db.queryOne<any>(
+      `SELECT td.*, lr.status AS last_run_status, lr.created_at AS last_run_at
+       FROM trigger.task_definitions td
+       LEFT JOIN LATERAL (
+         SELECT status, created_at FROM trigger.run_history rh
+         WHERE rh.task_identifier = td.task_identifier
+           AND rh.organization_id = td.organization_id
+         ORDER BY rh.created_at DESC LIMIT 1
+       ) lr ON true
+       WHERE td.task_identifier = $1 AND td.organization_id = $2
+       ORDER BY td.created_at DESC LIMIT 1`,
+      [taskIdentifier, organizationId]
+    );
+    return row ? this.mapRow(row) : null;
+  }
+
   async deleteByProject(projectId: string): Promise<number> {
     const result = await this.db.query(
       `DELETE FROM trigger.task_definitions WHERE project_id = $1`,
@@ -157,10 +176,28 @@ export class TaskDefinitionRepository {
       machinePreset: row.machine_preset,
       isNexusIntegration: row.is_nexus_integration,
       nexusService: row.nexus_service,
+      executionType: row.execution_type || 'prefix-derived',
+      executionTarget: row.execution_target || {},
       lastRunStatus: row.last_run_status || null,
       lastRunAt: row.last_run_at || null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+  }
+
+  async updateExecutionTarget(
+    orgId: string,
+    taskDefId: string,
+    executionType: string,
+    executionTarget: Record<string, unknown>
+  ): Promise<TaskDefinition | null> {
+    const row = await this.db.queryOne<any>(
+      `UPDATE trigger.task_definitions
+       SET execution_type = $1, execution_target = $2, updated_at = NOW()
+       WHERE task_def_id = $3 AND organization_id = $4
+       RETURNING *`,
+      [executionType, JSON.stringify(executionTarget), taskDefId, orgId]
+    );
+    return row ? this.mapRow(row) : null;
   }
 }
