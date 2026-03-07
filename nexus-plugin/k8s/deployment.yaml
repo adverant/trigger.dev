@@ -217,6 +217,13 @@ spec:
               value: "dsdon10@gmail.com"
             - name: HEALTH_REPORT_DIR
               value: "/mnt/nfs/health-reports"
+            # Resend email (health notifications)
+            - name: RESEND_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: RESEND_API_KEY
+                  optional: true
           resources:
             requests:
               cpu: "500m"

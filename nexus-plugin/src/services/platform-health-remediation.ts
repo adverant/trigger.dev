@@ -12,7 +12,6 @@
 import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as nodemailer from 'nodemailer';
 import type { Pool } from 'pg';
 import axios from 'axios';
 import { GeminiClient } from '../integrations/gemini.client';
@@ -456,65 +455,64 @@ ${issueXml}
     report: RemediationReport,
     healthReport: PlatformHealthReport,
   ): Promise<void> {
-    const smtpHost = process.env.SMTP_HOST;
-    const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
-    const smtpUser = process.env.SMTP_USER;
-    const smtpPass = process.env.SMTP_PASS;
-    const smtpFrom = process.env.SMTP_FROM || 'nexus-health@adverant.ai';
-
-    if (!smtpHost || !smtpUser) {
-      console.info('[remediation] SMTP not configured — skipping email notification');
+    const resendApiKey = process.env.RESEND_API_KEY;
+    if (!resendApiKey) {
+      console.info('[remediation] RESEND_API_KEY not configured — skipping email notification');
       return;
     }
 
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpPort === 465,
-      auth: { user: smtpUser, pass: smtpPass },
-    });
-
-    const statusEmoji = healthReport.overallStatus === 'CRITICAL' ? '[CRITICAL]'
+    const statusLabel = healthReport.overallStatus === 'CRITICAL' ? '[CRITICAL]'
       : healthReport.overallStatus === 'DEGRADED' ? '[DEGRADED]' : '[INFO]';
 
-    const subject = `${statusEmoji} Nexus Platform Health: ${report.issueCount} issues detected`;
+    const subject = `${statusLabel} Nexus Platform Health: ${report.issueCount} issues detected`;
 
-    // Build a concise HTML email
     const issueList = healthReport.checks
       .filter((c) => c.status === 'unhealthy' || c.status === 'degraded')
       .map((c) => `<li><strong>${c.component}</strong> (${c.status}): ${c.message}</li>`)
       .join('\n');
 
+    const remediationPreview = report.markdownReport.substring(0, 3000).replace(/\n/g, '<br>');
+
     const html = `
-      <h2>Nexus Platform Health Report</h2>
+      <h2>Nexus Platform Health Remediation Report</h2>
       <p><strong>Status:</strong> ${healthReport.overallStatus}</p>
       <p><strong>Time:</strong> ${healthReport.timestamp}</p>
       <p><strong>Issues:</strong> ${report.issueCount} | <strong>Checks:</strong> ${healthReport.summary.total}</p>
       <h3>Issues Detected</h3>
       <ul>${issueList}</ul>
       <h3>AI Remediation Summary</h3>
-      <p>${report.markdownReport.substring(0, 3000).replace(/\n/g, '<br>')}</p>
+      <p>${remediationPreview}</p>
+      <details><summary>XML Remediation Plan</summary><pre>${escapeXml(report.xmlRemediation)}</pre></details>
       <hr>
       <p><small>Report ID: ${report.reportId} | Model: ${report.modelUsed} | Duration: ${report.durationMs}ms</small></p>
     `;
 
     try {
-      await transporter.sendMail({
-        from: smtpFrom,
-        to: NOTIFICATION_EMAIL,
-        subject,
-        html,
-        attachments: [
-          {
-            filename: `remediation-${report.reportId}.xml`,
-            content: report.xmlRemediation,
-            contentType: 'application/xml',
+      const res = await axios.post(
+        'https://api.resend.com/emails',
+        {
+          from: 'Nexus Health <billing@adverant.ai>',
+          to: [NOTIFICATION_EMAIL],
+          subject,
+          html,
+          tags: [
+            { name: 'type', value: 'health-remediation' },
+            { name: 'reportId', value: report.reportId },
+          ],
+        },
+        {
+          timeout: 15_000,
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            'Content-Type': 'application/json',
           },
-        ],
-      });
-      console.info(`[remediation] Email sent to ${NOTIFICATION_EMAIL}`);
+        },
+      );
+      console.info(`[remediation] Email sent via Resend to ${NOTIFICATION_EMAIL} (id: ${res.data?.id})`);
     } catch (err) {
-      console.warn(`[remediation] Email send failed: ${(err as Error).message}`);
+      const status = (err as any)?.response?.status;
+      const body = (err as any)?.response?.data;
+      console.warn(`[remediation] Email send failed: ${(err as Error).message}`, { status, body });
     }
   }
 

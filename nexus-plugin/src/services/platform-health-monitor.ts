@@ -33,6 +33,8 @@ import { DEFAULT_THRESHOLDS } from '../types/health-monitor';
 // Constants
 // ---------------------------------------------------------------------------
 
+const RESEND_API_URL = 'https://api.resend.com/emails';
+const NOTIFICATION_EMAIL = process.env.HEALTH_NOTIFICATION_EMAIL || 'dsdon10@gmail.com';
 const HEALTH_CHECK_TIMEOUT_MS = 5_000;
 const NAMESPACE = process.env.K8S_NAMESPACE || 'nexus';
 const DEFAULT_NAMESPACE = process.env.K8S_DEFAULT_NAMESPACE || 'default';
@@ -145,6 +147,13 @@ export class PlatformHealthMonitor {
       `${summary.degraded} degraded | ${summary.unhealthy} unhealthy | ` +
       `${report.durationMs}ms`,
     );
+
+    // Send alert email for non-healthy status
+    if (overallStatus !== 'HEALTHY') {
+      this.sendHealthAlertEmail(report).catch((err) => {
+        console.warn(`[health-monitor] Alert email failed: ${(err as Error).message}`);
+      });
+    }
 
     return report;
   }
@@ -1046,6 +1055,61 @@ export class PlatformHealthMonitor {
       }
     } catch {
       // Use defaults if DB is unavailable
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Helpers
+  // -----------------------------------------------------------------------
+
+  // -----------------------------------------------------------------------
+  // Email alert (Resend API)
+  // -----------------------------------------------------------------------
+
+  private async sendHealthAlertEmail(report: PlatformHealthReport): Promise<void> {
+    const resendApiKey = process.env.RESEND_API_KEY;
+    if (!resendApiKey) return;
+
+    const statusLabel = report.overallStatus === 'CRITICAL' ? '[CRITICAL]' : '[DEGRADED]';
+    const issues = report.checks.filter((c) => c.status === 'unhealthy' || c.status === 'degraded');
+    const issueList = issues
+      .map((c) => `<li><strong>${c.component}</strong> (${c.status}): ${c.message}</li>`)
+      .join('\n');
+
+    const html = `
+      <h2>${statusLabel} Nexus Platform Health Alert</h2>
+      <p><strong>Status:</strong> ${report.overallStatus}</p>
+      <p><strong>Time:</strong> ${report.timestamp}</p>
+      <p><strong>Summary:</strong> ${report.summary.healthy}/${report.summary.total} healthy, ${report.summary.degraded} degraded, ${report.summary.unhealthy} unhealthy</p>
+      <h3>Issues</h3>
+      <ul>${issueList}</ul>
+      <p><small>Report ID: ${report.reportId} | Duration: ${report.durationMs}ms | AI remediation will follow if thresholds exceeded.</small></p>
+    `;
+
+    try {
+      await axios.post(
+        RESEND_API_URL,
+        {
+          from: 'Nexus Health <billing@adverant.ai>',
+          to: [NOTIFICATION_EMAIL],
+          subject: `${statusLabel} Nexus Health: ${issues.length} issues (${report.summary.unhealthy} unhealthy, ${report.summary.degraded} degraded)`,
+          html,
+          tags: [
+            { name: 'type', value: 'health-monitor' },
+            { name: 'status', value: report.overallStatus },
+          ],
+        },
+        {
+          timeout: 15_000,
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+      console.info(`[health-monitor] Alert email sent to ${NOTIFICATION_EMAIL}`);
+    } catch (err) {
+      console.warn(`[health-monitor] Alert email failed: ${(err as Error).message}`);
     }
   }
 
