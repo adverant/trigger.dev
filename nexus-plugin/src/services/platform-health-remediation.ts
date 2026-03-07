@@ -62,19 +62,8 @@ export class PlatformHealthRemediation {
     const systemInstruction = this.buildSystemInstruction();
     const prompt = this.buildPrompt(healthReport, issues, previousReports);
 
-    // Call Gemini
-    let aiResponse;
-    try {
-      aiResponse = await this.gemini.generateContent(prompt, systemInstruction);
-    } catch (err) {
-      console.error(`[remediation] Gemini call failed: ${(err as Error).message}`);
-      aiResponse = {
-        text: `AI analysis failed: ${(err as Error).message}`,
-        promptTokens: 0,
-        completionTokens: 0,
-        modelUsed: 'gemini-2.5-pro',
-      };
-    }
+    // Call AI (Gemini primary, Claude proxy fallback)
+    const aiResponse = await this.gemini.generateContentWithFallback(prompt, systemInstruction);
 
     // Parse the AI response into markdown and XML
     const markdownReport = this.extractMarkdown(aiResponse.text, healthReport, issues);

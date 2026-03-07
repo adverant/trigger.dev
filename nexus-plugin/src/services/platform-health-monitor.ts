@@ -37,7 +37,8 @@ const RESEND_API_URL = 'https://api.resend.com/emails';
 const NOTIFICATION_EMAIL = process.env.HEALTH_NOTIFICATION_EMAIL || 'dsdon10@gmail.com';
 const HEALTH_CHECK_TIMEOUT_MS = 5_000;
 const NAMESPACE = process.env.K8S_NAMESPACE || 'nexus';
-const DEFAULT_NAMESPACE = process.env.K8S_DEFAULT_NAMESPACE || 'default';
+// Monitor only the nexus namespace — default namespace contains stale/orphaned resources
+const MONITOR_NAMESPACES = (process.env.MONITOR_NAMESPACES || NAMESPACE).split(',').map(s => s.trim());
 
 /** Common health endpoint paths to probe on discovered services. */
 const HEALTH_PATHS = ['/health', '/api/health', '/healthz', '/trigger/health', '/ready', '/'];
@@ -196,8 +197,8 @@ export class PlatformHealthMonitor {
 
     const checks: HealthCheck[] = [];
 
-    // Check pods in both nexus and default namespaces
-    for (const ns of [NAMESPACE, DEFAULT_NAMESPACE]) {
+    // Check pods in monitored namespaces
+    for (const ns of MONITOR_NAMESPACES) {
       const pods = await this.k8s.listPods(ns);
       for (const pod of pods) {
         const start = Date.now();
@@ -292,7 +293,7 @@ export class PlatformHealthMonitor {
 
     const checks: HealthCheck[] = [];
 
-    for (const ns of [NAMESPACE, DEFAULT_NAMESPACE]) {
+    for (const ns of MONITOR_NAMESPACES) {
       const deployments = await this.k8s.listDeployments(ns);
       for (const dep of deployments) {
         const start = Date.now();
@@ -343,7 +344,7 @@ export class PlatformHealthMonitor {
 
     const checks: HealthCheck[] = [];
 
-    for (const ns of [NAMESPACE, DEFAULT_NAMESPACE]) {
+    for (const ns of MONITOR_NAMESPACES) {
       const sets = await this.k8s.listStatefulSets(ns);
       for (const ss of sets) {
         const start = Date.now();
@@ -460,18 +461,18 @@ export class PlatformHealthMonitor {
   }
 
   private async checkNeo4j(): Promise<HealthCheck> {
-    const neo4jHost = process.env.NEO4J_HOST || 'neo4j.default.svc.cluster.local';
+    const neo4jHost = process.env.NEO4J_HOST || 'nexus-neo4j.nexus.svc.cluster.local';
     return this.httpHealthCheck(`db:neo4j`, 'database', `http://${neo4jHost}:7474/`);
   }
 
   private async checkQdrant(): Promise<HealthCheck> {
-    const qdrantHost = process.env.QDRANT_HOST || 'qdrant.default.svc.cluster.local';
+    const qdrantHost = process.env.QDRANT_HOST || 'nexus-qdrant.nexus.svc.cluster.local';
     return this.httpHealthCheck(`db:qdrant`, 'database', `http://${qdrantHost}:6333/`);
   }
 
   // -----------------------------------------------------------------------
   // 6. Service Endpoints (FULLY DYNAMIC)
-  //    Discovers all K8s services in nexus + default namespaces,
+  //    Discovers all K8s services in monitored namespaces,
   //    probes health endpoints automatically.
   // -----------------------------------------------------------------------
 
@@ -482,7 +483,7 @@ export class PlatformHealthMonitor {
 
     const checks: HealthCheck[] = [];
 
-    for (const ns of [NAMESPACE, DEFAULT_NAMESPACE]) {
+    for (const ns of MONITOR_NAMESPACES) {
       const services = await this.k8s.listServices(ns);
 
       // Probe each service in parallel
@@ -708,7 +709,7 @@ export class PlatformHealthMonitor {
       `nexus-postgres.${NAMESPACE}.svc.cluster.local`,
       `nexus-redis.${NAMESPACE}.svc.cluster.local`,
       `nexus-graphrag.${NAMESPACE}.svc.cluster.local`,
-      `api-gateway.${NAMESPACE}.svc.cluster.local`,
+      `nexus-api-gateway.${NAMESPACE}.svc.cluster.local`,
     ];
 
     const checks = await Promise.allSettled(
@@ -804,8 +805,8 @@ export class PlatformHealthMonitor {
 
     const checks: HealthCheck[] = [];
 
-    // Check PVCs in both namespaces
-    for (const ns of [NAMESPACE, DEFAULT_NAMESPACE]) {
+    // Check PVCs in monitored namespaces
+    for (const ns of MONITOR_NAMESPACES) {
       const pvcs = await this.k8s.listPVCs(ns);
       for (const pvc of pvcs) {
         const start = Date.now();

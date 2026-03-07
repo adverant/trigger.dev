@@ -205,13 +205,17 @@ spec:
                 secretKeyRef:
                   name: nexus-trigger-secrets
                   key: N8N_API_KEY
-            # Gemini AI (health monitor remediation)
+            # AI (health monitor remediation) — Gemini primary, Claude proxy fallback
             - name: GEMINI_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: nexus-trigger-gemini
                   key: GEMINI_API_KEY
                   optional: true
+            - name: CLAUDE_CODE_PROXY_URL
+              value: "http://claude-code-proxy.nexus.svc.cluster.local:3100"
+            - name: CLAUDE_PROXY_MODEL
+              value: "claude-sonnet-4-5-20250514"
             # Health monitor notification
             - name: HEALTH_NOTIFICATION_EMAIL
               value: "dsdon10@gmail.com"

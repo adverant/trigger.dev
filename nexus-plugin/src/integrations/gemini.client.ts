@@ -1,14 +1,18 @@
 /**
- * Gemini 2.5 Pro client for AI-powered remediation analysis.
+ * AI client for remediation analysis.
  *
- * Uses the @google/generative-ai SDK with a standard API key
- * (not Vertex AI). The key is read from the GEMINI_API_KEY env var.
+ * Primary: Gemini 2.5 Pro via @google/generative-ai SDK (API key auth).
+ * Fallback: Claude Code Max proxy (OpenAI-compatible, no auth, internal K8s).
  */
 
 import { GoogleGenerativeAI, HarmBlockThreshold, HarmCategory } from '@google/generative-ai';
+import axios from 'axios';
 
 const DEFAULT_MODEL = 'gemini-2.5-pro';
 const GENERATION_TIMEOUT_MS = 120_000;
+const CLAUDE_PROXY_URL = process.env.CLAUDE_CODE_PROXY_URL || 'http://claude-code-proxy.nexus.svc.cluster.local:3100';
+const CLAUDE_PROXY_MODEL = process.env.CLAUDE_PROXY_MODEL || 'claude-sonnet-4-5-20250514';
+const CLAUDE_PROXY_TIMEOUT_MS = 300_000;
 
 export interface GeminiResponse {
   text: string;
@@ -78,5 +82,56 @@ export class GeminiClient {
       completionTokens: usage?.candidatesTokenCount ?? 0,
       modelUsed: this.model,
     };
+  }
+
+  /**
+   * Try Gemini first, fall back to Claude Code Max proxy if unavailable/failed.
+   */
+  async generateContentWithFallback(
+    prompt: string,
+    systemInstruction: string,
+  ): Promise<GeminiResponse> {
+    // 1. Try Gemini (if API key configured)
+    if (this.isAvailable()) {
+      try {
+        return await this.generateContent(prompt, systemInstruction);
+      } catch (err) {
+        console.warn(`[remediation] Gemini failed, falling back to Claude proxy: ${(err as Error).message}`);
+      }
+    }
+
+    // 2. Fall back to Claude Code Max proxy (OpenAI-compatible, no auth)
+    try {
+      const response = await axios.post(
+        `${CLAUDE_PROXY_URL}/v1/chat/completions`,
+        {
+          model: CLAUDE_PROXY_MODEL,
+          messages: [
+            { role: 'system', content: systemInstruction },
+            { role: 'user', content: prompt },
+          ],
+          max_tokens: 16384,
+          temperature: 0.2,
+        },
+        { timeout: CLAUDE_PROXY_TIMEOUT_MS, headers: { 'Content-Type': 'application/json' } },
+      );
+
+      const choice = response.data.choices?.[0]?.message?.content ?? '';
+      const usage = response.data.usage ?? {};
+      return {
+        text: choice,
+        promptTokens: usage.prompt_tokens ?? 0,
+        completionTokens: usage.completion_tokens ?? 0,
+        modelUsed: response.data.model ?? CLAUDE_PROXY_MODEL,
+      };
+    } catch (proxyErr) {
+      console.error(`[remediation] Claude proxy also failed: ${(proxyErr as Error).message}`);
+      return {
+        text: `AI analysis unavailable — both Gemini and Claude proxy failed: ${(proxyErr as Error).message}`,
+        promptTokens: 0,
+        completionTokens: 0,
+        modelUsed: 'none',
+      };
+    }
   }
 }
