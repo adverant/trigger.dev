@@ -5,6 +5,7 @@ import { TriggerProxyService, TriggerTaskOptions, BatchTriggerItem } from './tri
 import { SkillsEngineTaskHandler } from './skills-engine-task-handler';
 import { ProseCreatorTaskHandler } from './prosecreator-task-handler';
 import { syncPlatformKnowledge } from '../task-definitions/platform-knowledge-tasks';
+import { runPlatformHealthCheck, shouldTriggerRemediation, runPlatformHealthRemediation } from '../task-definitions/platform-health-tasks';
 import { ProjectRepository, Project } from '../database/repositories/project.repository';
 import { RunRepository, CreateRunData } from '../database/repositories/run.repository';
 import { TaskDefinitionRepository, UpsertTaskDefinitionData } from '../database/repositories/task-definition.repository';
@@ -31,7 +32,9 @@ export class TaskService {
     private nexusConfig: NexusConfig,
     private io: SocketIOServer,
     private runStreamManager: RunStreamManager,
-    private logRepo?: LogRepository
+    private logRepo?: LogRepository,
+    private dbPool?: any,
+    private redis?: any,
   ) {}
 
   /** Write a structured log entry (fire-and-forget, never blocks callers). */
@@ -68,6 +71,30 @@ export class TaskService {
       throw new NotFoundError('Project', projectId);
     }
 
+    // Check for explicit execution target override (not prefix-derived)
+    const taskDef = await this.taskDefRepo.findByIdentifier(projectId, taskId);
+    if (taskDef && taskDef.executionType && taskDef.executionType !== 'prefix-derived') {
+      const target = taskDef.executionTarget || {};
+      if (taskDef.executionType === 'skill' && target.skillId) {
+        // Route to Skills Engine with the configured skillId
+        const skillPayload = { ...payload, skill_id: target.skillId };
+        return this.handleSkillsEngineTask(orgId, userId, projectId, taskId, skillPayload, options);
+      }
+      if (taskDef.executionType === 'n8n-workflow' && target.workflowId) {
+        // Route to n8n — for now, fall through to proxy (n8n handler TBD)
+        logger.info('n8n-workflow execution target configured but handler not yet implemented, falling through to proxy', {
+          taskId, workflowId: target.workflowId,
+        });
+      }
+      if (taskDef.executionType === 'mageagent-prompt') {
+        // MageAgent routing — fall through to proxy for now
+        logger.info('mageagent-prompt execution target configured but handler not yet implemented, falling through to proxy', {
+          taskId,
+        });
+      }
+      // Other types (code-handler, external-webhook) fall through to existing routing
+    }
+
     // Skills Engine tasks are handled directly (not proxied to cloud workers)
     if (taskId.startsWith('skills-engine-')) {
       return this.handleSkillsEngineTask(orgId, userId, projectId, taskId, payload, options);
@@ -76,6 +103,11 @@ export class TaskService {
     // Platform Knowledge tasks run locally
     if (taskId.startsWith('platform-knowledge-')) {
       return this.handlePlatformKnowledgeTask(orgId, userId, projectId, taskId, payload, options);
+    }
+
+    // Platform Health Monitor tasks run locally
+    if (taskId.startsWith('platform-health-')) {
+      return this.handlePlatformHealthTask(orgId, userId, projectId, taskId, payload, options);
     }
 
     const result = await this.proxy.triggerTask(taskId, payload, options);
@@ -484,6 +516,175 @@ export class TaskService {
   }
 
   /**
+   * Handle Platform Health tasks in-process — runs health checks locally
+   * and optionally triggers AI remediation via Gemini 2.5 Pro.
+   */
+  private async handlePlatformHealthTask(
+    orgId: string,
+    userId: string,
+    projectId: string,
+    taskId: string,
+    payload: any,
+    options?: TriggerTaskOptions
+  ): Promise<any> {
+    const triggerRunId = `ph-${randomUUID()}`;
+    const startedAt = new Date();
+
+    const run = await this.runRepo.create({
+      triggerRunId,
+      projectId,
+      organizationId: orgId,
+      taskIdentifier: taskId,
+      status: 'EXECUTING',
+      payload,
+      startedAt,
+      idempotencyKey: options?.idempotencyKey,
+      metadata: { ...options?.metadata, source: 'platform-health' },
+      tags: options?.tags || ['platform-health'],
+    });
+
+    await this.usageRepo.record(orgId, 'task_trigger', {
+      taskId,
+      projectId,
+      runId: run.runId,
+    });
+
+    triggerTasksTriggered.inc({ task_id: taskId, organization_id: orgId });
+
+    emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+      taskId,
+      runId: run.runId,
+      triggerRunId,
+      status: 'EXECUTING',
+    });
+
+    if (taskId === 'platform-health-monitor') {
+      // Run health check async — don't block the HTTP response
+      runPlatformHealthCheck(this.dbPool, this.redis)
+        .then(async (report) => {
+          await this.runRepo.updateStatus(run.runId, 'COMPLETED', {
+            overallStatus: report.overallStatus,
+            summary: report.summary,
+            durationMs: report.durationMs,
+            issueCount: report.issuesExceedingBaseline.length,
+          });
+
+          emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+            taskId,
+            runId: run.runId,
+            triggerRunId,
+            status: 'COMPLETED',
+            output: { overallStatus: report.overallStatus, summary: report.summary },
+          });
+
+          this.writeLog(orgId, run.runId, taskId, 'INFO', `Health check: ${report.overallStatus}`, {
+            ...report.summary,
+            durationMs: report.durationMs,
+          });
+
+          logger.info('Platform health check completed', {
+            taskId,
+            runId: run.runId,
+            overallStatus: report.overallStatus,
+            healthy: report.summary.healthy,
+            degraded: report.summary.degraded,
+            unhealthy: report.summary.unhealthy,
+            durationMs: report.durationMs,
+          });
+
+          // Trigger remediation if issues exceed baseline
+          const shouldRemediate = await shouldTriggerRemediation(this.dbPool, this.redis, report);
+          if (shouldRemediate) {
+            logger.info('Triggering platform health remediation', {
+              issueCount: report.issuesExceedingBaseline.length,
+            });
+            this.triggerTask(orgId, userId, projectId, 'platform-health-remediation', {
+              healthReport: report,
+            }).catch((err) => {
+              logger.error('Failed to trigger remediation', { error: err.message });
+            });
+          }
+        })
+        .catch(async (err) => {
+          await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, err.message);
+          this.writeLog(orgId, run.runId, taskId, 'ERROR', `Health check failed: ${err.message}`);
+
+          emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+            taskId,
+            runId: run.runId,
+            triggerRunId,
+            status: 'FAILED',
+            error: err.message,
+          });
+
+          logger.error('Platform health check failed', { taskId, runId: run.runId, error: err.message });
+        });
+    } else if (taskId === 'platform-health-remediation') {
+      // Run AI remediation async
+      const healthReport = payload?.healthReport;
+      if (!healthReport) {
+        await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, 'Missing healthReport in payload');
+        return { id: triggerRunId, runId: triggerRunId, status: 'FAILED', error: 'Missing healthReport' };
+      }
+
+      runPlatformHealthRemediation(this.dbPool, healthReport)
+        .then(async (report) => {
+          await this.runRepo.updateStatus(run.runId, 'COMPLETED', {
+            reportId: report.reportId,
+            issueCount: report.issueCount,
+            modelUsed: report.modelUsed,
+            durationMs: report.durationMs,
+          });
+
+          emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+            taskId,
+            runId: run.runId,
+            triggerRunId,
+            status: 'COMPLETED',
+            output: { reportId: report.reportId, issueCount: report.issueCount },
+          });
+
+          this.writeLog(orgId, run.runId, taskId, 'INFO', `Remediation complete: ${report.issueCount} issues`, {
+            reportId: report.reportId,
+            modelUsed: report.modelUsed,
+            durationMs: report.durationMs,
+          });
+
+          logger.info('Platform health remediation completed', {
+            taskId,
+            runId: run.runId,
+            reportId: report.reportId,
+            issueCount: report.issueCount,
+            modelUsed: report.modelUsed,
+            durationMs: report.durationMs,
+          });
+        })
+        .catch(async (err) => {
+          await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, err.message);
+          this.writeLog(orgId, run.runId, taskId, 'ERROR', `Remediation failed: ${err.message}`);
+
+          emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+            taskId,
+            runId: run.runId,
+            triggerRunId,
+            status: 'FAILED',
+            error: err.message,
+          });
+
+          logger.error('Platform health remediation failed', { taskId, runId: run.runId, error: err.message });
+        });
+    }
+
+    return {
+      id: triggerRunId,
+      runId: triggerRunId,
+      status: 'EXECUTING',
+      localRunId: run.runId,
+      taskId,
+    };
+  }
+
+  /**
    * Handle ProseCreator tasks in-process — calls Claude Max Proxy directly.
    * No external routing. Blueprint generation uses skill instructions + project data.
    */
@@ -672,8 +873,23 @@ export class TaskService {
     return result;
   }
 
+  async updateExecutionTarget(
+    orgId: string,
+    taskDefId: string,
+    executionType: string,
+    executionTarget: Record<string, unknown>
+  ): Promise<any> {
+    return this.taskDefRepo.updateExecutionTarget(orgId, taskDefId, executionType, executionTarget);
+  }
+
   async getTaskById(orgId: string, taskDefId: string): Promise<any | null> {
-    return this.taskDefRepo.findById(taskDefId, orgId);
+    // Try UUID lookup first, then fall back to slug (task_identifier) lookup
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(taskDefId)) {
+      return this.taskDefRepo.findById(taskDefId, orgId);
+    }
+    // Not a UUID — treat as task_identifier slug
+    return this.taskDefRepo.findBySlug(taskDefId, orgId);
   }
 
   async listTaskDefinitions(orgId: string, projectId?: string): Promise<any[]> {

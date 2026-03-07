@@ -201,7 +201,9 @@ class NexusTriggerServer {
         this.config.nexus,
         this.io,
         this.runStreamManager,
-        logRepo
+        logRepo,
+        this.db.getPool(),
+        this.redis,
       );
       const runService = new RunService(triggerProxy, runRepo, this.io);
       const scheduleService = new ScheduleService(scheduleRepo, usageRepo, this.io);
@@ -792,6 +794,46 @@ class NexusTriggerServer {
       });
     } catch (err: any) {
       logger.error('Failed to seed default schedules', { error: err.message });
+    }
+
+    // --- Platform Health Monitor (every 30 minutes) ---
+    try {
+      const projects = await this.db.getPool().query(
+        'SELECT project_id, organization_id, user_id FROM trigger.projects LIMIT 1'
+      );
+      if (projects.rows.length === 0) return;
+      const { project_id, organization_id, user_id } = projects.rows[0];
+
+      const existing = await scheduleRepo.findByOrgId(organization_id, {
+        taskIdentifier: 'platform-health-monitor',
+      });
+      if (existing.length > 0) {
+        logger.info('platform-health-monitor schedule already exists', {
+          scheduleId: existing[0].scheduleId,
+          enabled: existing[0].enabled,
+        });
+        return;
+      }
+
+      const healthSchedule = await scheduleRepo.create({
+        projectId: project_id,
+        organizationId: organization_id,
+        userId: user_id,
+        taskIdentifier: 'platform-health-monitor',
+        cronExpression: '*/30 * * * *',
+        timezone: 'UTC',
+        description: 'Platform health monitor — checks all services, pods, databases every 30 minutes',
+        payload: { reason: 'scheduled-30m' },
+      });
+
+      this.scheduleExecutor.addSchedule(healthSchedule);
+
+      logger.info('Seeded platform-health-monitor schedule', {
+        scheduleId: healthSchedule.scheduleId,
+        cron: '*/30 * * * *',
+      });
+    } catch (err: any) {
+      logger.error('Failed to seed platform-health-monitor schedule', { error: err.message });
     }
   }
 

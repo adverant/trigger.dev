@@ -1,0 +1,48 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nexus-trigger-health-reader
+  labels:
+    app: nexus-trigger
+    app.kubernetes.io/name: nexus-trigger
+    app.kubernetes.io/component: health-monitor
+rules:
+  # Core API — pods, nodes, services, PVCs, endpoints, namespaces
+  - apiGroups: [""]
+    resources: ["pods", "nodes", "services", "persistentvolumeclaims", "endpoints", "namespaces"]
+    verbs: ["get", "list"]
+  # Pod logs (for crash investigation)
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Apps API — deployments, statefulsets, replicasets
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets"]
+    verbs: ["get", "list"]
+  # Metrics API — pod and node resource usage
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list"]
+  # Istio networking — virtual services, gateways, destination rules, envoy filters
+  - apiGroups: ["networking.istio.io"]
+    resources: ["virtualservices", "gateways", "destinationrules", "envoyfilters"]
+    verbs: ["get", "list"]
+  # cert-manager — certificate resources
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nexus-trigger-health-reader-binding
+  labels:
+    app: nexus-trigger
+subjects:
+  - kind: ServiceAccount
+    name: nexus-trigger
+    namespace: nexus
+roleRef:
+  kind: ClusterRole
+  name: nexus-trigger-health-reader
+  apiGroup: rbac.authorization.k8s.io

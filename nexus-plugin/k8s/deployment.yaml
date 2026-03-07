@@ -205,6 +205,18 @@ spec:
                 secretKeyRef:
                   name: nexus-trigger-secrets
                   key: N8N_API_KEY
+            # Gemini AI (health monitor remediation)
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-trigger-gemini
+                  key: GEMINI_API_KEY
+                  optional: true
+            # Health monitor notification
+            - name: HEALTH_NOTIFICATION_EMAIL
+              value: "dsdon10@gmail.com"
+            - name: HEALTH_REPORT_DIR
+              value: "/mnt/nfs/health-reports"
           resources:
             requests:
               cpu: "500m"
@@ -239,10 +251,15 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: health-reports
+              mountPath: /mnt/nfs/health-reports
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: nexus-trigger-data
+        - name: health-reports
+          emptyDir:
+            sizeLimit: 500Mi
 
 ---
 apiVersion: v1
