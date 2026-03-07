@@ -12,6 +12,7 @@
 
 import axios from 'axios';
 import { createLogger } from '../utils/logger';
+import { classifyError } from '../utils/structured-error';
 
 const logger = createLogger({ component: 'prosecreator-task-handler' });
 
@@ -60,19 +61,34 @@ export class ProseCreatorTaskHandler {
       userMessageLength: userMessage.length,
     });
 
-    const res = await axios.post(`${this.proxyUrl}/v1/chat/completions`, {
-      model: this.model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage },
-      ],
-      max_tokens: 16384,
-      temperature: 0.7,
-      stream: false,
-    }, {
-      timeout: 600000, // 10 min — Opus blueprint generation can take 5-8 min
-      headers: { 'Content-Type': 'application/json' },
-    });
+    let res: any;
+    try {
+      res = await axios.post(`${this.proxyUrl}/v1/chat/completions`, {
+        model: this.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage },
+        ],
+        max_tokens: 16384,
+        temperature: 0.7,
+        stream: false,
+      }, {
+        timeout: 600000, // 10 min — Opus blueprint generation can take 5-8 min
+        headers: { 'Content-Type': 'application/json' },
+      });
+    } catch (error) {
+      const structured = classifyError(error, 'claude-code-proxy');
+      logger.error('Claude proxy call failed', {
+        orgId: this.orgId,
+        errorCode: structured.code,
+        errorCategory: structured.category,
+        httpStatus: structured.httpStatus,
+        message: structured.message,
+      });
+      const enriched = new Error(structured.message);
+      (enriched as any).structuredError = structured;
+      throw enriched;
+    }
 
     const content = res.data?.choices?.[0]?.message?.content || '';
     const durationMs = Date.now() - startTime;

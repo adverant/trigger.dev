@@ -16,6 +16,7 @@ import { emitToOrg } from '../websocket/socket-server';
 import { RunStreamManager } from '../websocket/run-stream';
 import { createLogger } from '../utils/logger';
 import { NotFoundError } from '../utils/errors';
+import { classifyError } from '../utils/structured-error';
 import { triggerTasksTriggered } from '../utils/metrics';
 
 const logger = createLogger({ component: 'task-service' });
@@ -525,6 +526,7 @@ export class TaskService {
         ...options?.metadata,
         source: 'prosecreator',
         userId,
+        projectId,
         skillId: payload?.inputData?.skill_id || payload?.payload?.inputData?.skill_id,
       },
       tags: options?.tags || ['prosecreator'],
@@ -582,9 +584,16 @@ export class TaskService {
         });
       })
       .catch(async (err) => {
-        const errMsg = err instanceof Error ? err.message : String(err);
+        const structured = (err as any).structuredError || classifyError(err, 'prosecreator');
+        const errMsg = structured.message;
+
         await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, errMsg);
-        this.writeLog(orgId, run.runId, taskId, 'ERROR', `ProseCreator task failed: ${errMsg}`);
+        await this.runRepo.mergeMetadata(run.runId, { structuredError: structured }).catch(() => {});
+
+        this.writeLog(orgId, run.runId, taskId, 'ERROR', `ProseCreator task failed: ${errMsg}`, {
+          errorCode: structured.code,
+          errorCategory: structured.category,
+        });
 
         emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
           taskId,
@@ -592,9 +601,15 @@ export class TaskService {
           triggerRunId,
           status: 'FAILED',
           error: errMsg,
+          structuredError: structured,
         });
 
-        logger.error('ProseCreator task failed', { taskId, runId: run.runId, error: errMsg });
+        logger.error('ProseCreator task failed', {
+          taskId, runId: run.runId,
+          error: errMsg,
+          errorCode: structured.code,
+          errorCategory: structured.category,
+        });
       });
 
     return {

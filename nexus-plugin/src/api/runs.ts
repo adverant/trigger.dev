@@ -20,6 +20,7 @@ function toUIRun(run: Run): Record<string, any> {
     payload: run.payload,
     output: run.output,
     error: run.errorMessage,
+    structuredError: run.metadata?.structuredError || null,
     startedAt: run.startedAt ? run.startedAt.toISOString?.() ?? String(run.startedAt) : null,
     completedAt: run.completedAt ? run.completedAt.toISOString?.() ?? String(run.completedAt) : null,
     duration: run.durationMs,
@@ -29,6 +30,7 @@ function toUIRun(run: Run): Record<string, any> {
     isTest: run.isTest || false,
     idempotencyKey: run.idempotencyKey,
     version: undefined,
+    metadata: run.metadata || {},
   };
 }
 
