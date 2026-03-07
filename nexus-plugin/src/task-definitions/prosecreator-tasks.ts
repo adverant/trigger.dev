@@ -12,6 +12,7 @@
  * - prosecreatorExportPipeline: Multi-format export (DOCX, EPUB, PDF)
  * - prosecreatorSeriesIntelligenceSync: Cross-book series consistency analysis
  * - prosecreatorDeepInsightGeneration: Semantic-level writing insights
+ * - prosecreatorPanelAnalysis: Inspector panel LLM analysis via Claude Code Max proxy
  */
 
 import { task } from '@trigger.dev/sdk/v3';
@@ -363,5 +364,92 @@ export const prosecreatorDeepInsightGeneration = task({
   run: async (payload: ProseCreatorWorkflowPayload) => {
     const client = getClient(payload.organizationId);
     return executeProseCreatorWorkflow(client, 'deep-insight-generation', payload);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Inspector Panel Analysis — generic LLM call via Claude Code Max proxy
+// ---------------------------------------------------------------------------
+
+export interface PanelAnalysisPayload {
+  organizationId: string;
+  analysisType: string;
+  systemMessage: string;
+  prompt: string;
+  maxTokens?: number;
+  temperature?: number;
+}
+
+export interface PanelAnalysisResult {
+  content: string;
+  model: string;
+  usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  analysisType: string;
+  durationMs: number;
+}
+
+/**
+ * Generic inspector panel analysis task.
+ * Receives a fully-built prompt and calls Claude Code Max proxy
+ * (flat rate, unlimited) instead of MageAgent or OpenRouter.
+ */
+export const prosecreatorPanelAnalysis = task({
+  id: 'prosecreator-panel-analysis',
+  retry: {
+    maxAttempts: 2,
+    minTimeoutInMs: 3000,
+    maxTimeoutInMs: 180000,
+    factor: 2,
+  },
+  run: async (payload: PanelAnalysisPayload): Promise<PanelAnalysisResult> => {
+    const startTime = Date.now();
+    const proxyUrl = process.env.CLAUDE_CODE_MAX_PROXY_URL || 'http://claude-code-proxy:3100';
+
+    console.log(
+      `[prosecreator] Panel analysis: type=${payload.analysisType}, promptLen=${payload.prompt.length}`
+    );
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 150000); // 2.5 min
+
+    try {
+      const res = await fetch(`${proxyUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'anthropic/claude-sonnet-4',
+          messages: [
+            { role: 'system', content: payload.systemMessage },
+            { role: 'user', content: payload.prompt },
+          ],
+          max_tokens: payload.maxTokens || 8000,
+          temperature: payload.temperature || 0.3,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`Claude Code Max proxy error ${res.status}: ${errText.slice(0, 300)}`);
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const data = await res.json() as any;
+      const durationMs = Date.now() - startTime;
+
+      console.log(
+        `[prosecreator] Panel analysis complete: type=${payload.analysisType}, duration=${durationMs}ms, model=${data.model || 'unknown'}`
+      );
+
+      return {
+        content: data.choices?.[0]?.message?.content || '',
+        model: data.model || 'unknown',
+        usage: data.usage || {},
+        analysisType: payload.analysisType,
+        durationMs,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
   },
 });

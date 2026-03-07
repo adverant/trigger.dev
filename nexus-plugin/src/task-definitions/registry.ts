@@ -392,6 +392,12 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
     nexusService: 'prosecreator',
     retryConfig: { maxAttempts: 3, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
   },
+  {
+    taskIdentifier: 'prosecreator-panel-analysis',
+    description: 'Inspector panel LLM analysis via Claude Code Max proxy (dialogue, pacing, themes, retention, argument, LinkedIn, craft)',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
+  },
 
   // ── Sandbox (4) ─────────────────────────────────────────────────────
   {
