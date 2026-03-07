@@ -770,8 +770,7 @@ class NexusTriggerServer {
           scheduleId: existing[0].scheduleId,
           enabled: existing[0].enabled,
         });
-        return;
-      }
+      } else {
 
       // Create the default schedule
       const schedule = await scheduleRepo.create({
@@ -792,6 +791,7 @@ class NexusTriggerServer {
         scheduleId: schedule.scheduleId,
         cron: '0 3 * * *',
       });
+      }
     } catch (err: any) {
       logger.error('Failed to seed default schedules', { error: err.message });
     }
