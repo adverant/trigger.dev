@@ -398,6 +398,12 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
     nexusService: 'prosecreator',
     retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
   },
+  {
+    taskIdentifier: 'prosecreator-novel-import',
+    description: 'Import a completed novel — parse chapters, extract characters, identify plot threads via sequential LLM analysis',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 10000, maxTimeoutInMs: 1800000, factor: 2 },
+  },
 
   // ── Sandbox (4) ─────────────────────────────────────────────────────
   {

@@ -13,6 +13,7 @@
  * - prosecreatorSeriesIntelligenceSync: Cross-book series consistency analysis
  * - prosecreatorDeepInsightGeneration: Semantic-level writing insights
  * - prosecreatorPanelAnalysis: Inspector panel LLM analysis via Claude Code Max proxy
+ * - prosecreatorNovelImport: Import a completed novel — parse chapters, extract characters, identify plot threads
  */
 
 import { task } from '@trigger.dev/sdk/v3';
@@ -451,5 +452,510 @@ export const prosecreatorPanelAnalysis = task({
     } finally {
       clearTimeout(timeout);
     }
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Novel Import — parse a completed novel into structured project data
+// ---------------------------------------------------------------------------
+
+export interface NovelImportPayload {
+  organizationId: string;
+  documentId: string;
+  extractedContent: string;
+  originalFilename: string;
+  projectTitle?: string;
+  genre?: string;
+  format?: string;
+}
+
+interface ChapterSegment {
+  chapter_number: number;
+  title: string | null;
+  content: string;
+  word_count: number;
+}
+
+interface ChapterAnalysis {
+  chapter_number: number;
+  title: string | null;
+  synopsis: string;
+  pov_character: string | null;
+  content: string;
+  word_count: number;
+  beats: Array<{
+    beat_number: number;
+    beat_type: string;
+    content: string;
+    word_count: number;
+  }>;
+  characters_mentioned: Array<{
+    name: string;
+    role_hint: string;
+    actions: string;
+  }>;
+  plot_developments: string[];
+}
+
+export interface NovelImportResult {
+  chapters: ChapterAnalysis[];
+  characters: Array<{
+    character_name: string;
+    role: 'protagonist' | 'antagonist' | 'supporting' | 'minor';
+    backstory: string;
+    motivations: string;
+    personality_traits: string;
+    speaking_style: string;
+    age_range: string | null;
+    aliases: string[];
+  }>;
+  plot_threads: Array<{
+    name: string;
+    description: string;
+    importance: 'primary' | 'secondary' | 'tertiary';
+    thread_type: string;
+    characters_involved: string[];
+    introduced_chapter: number;
+    resolved_chapter: number | null;
+    status: string;
+  }>;
+  metadata: {
+    total_words: number;
+    chapters_detected: number;
+    characters_found: number;
+    plot_threads_found: number;
+    processing_time_ms: number;
+  };
+}
+
+// Chapter heading detection patterns (duplicated from NovelParserService — runs in separate process)
+const CHAPTER_HEADING_PATTERNS: RegExp[] = [
+  /^(?:chapter)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty)(?:\s*[:.\-—]\s*(.+))?$/i,
+  /^CHAPTER\s+(?:\d+|[IVXLC]+|ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN|ELEVEN|TWELVE|THIRTEEN|FOURTEEN|FIFTEEN|SIXTEEN|SEVENTEEN|EIGHTEEN|NINETEEN|TWENTY|THIRTY|FORTY|FIFTY)(?:\s*[:.\-—]\s*(.+))?$/,
+  /^(?:part)\s+(?:\d+|[IVXLC]+|one|two|three|four|five|six|seven|eight|nine|ten)(?:\s*[:.\-—]\s*(.+))?$/i,
+  /^BOOK\s+(?:\d+|[IVXLC]+|ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)(?:\s*[:.\-—]\s*(.+))?$/i,
+  /^ACT\s+(?:\d+|[IVXLC]+|ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT)(?:\s*[:.\-—]\s*(.+))?$/i,
+  /^[IVXLC]+\.?$/,
+  /^\d{1,3}[.):]?\s*$/,
+];
+
+const WORD_NUMBERS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17,
+  eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50,
+};
+
+function romanToNum(roman: string): number {
+  const m: Record<string, number> = { I: 1, V: 5, X: 10, L: 50, C: 100 };
+  let r = 0;
+  const u = roman.toUpperCase();
+  for (let i = 0; i < u.length; i++) {
+    const cur = m[u[i]] || 0;
+    const nxt = i + 1 < u.length ? (m[u[i + 1]] || 0) : 0;
+    r += cur < nxt ? -cur : cur;
+  }
+  return r;
+}
+
+function extractNum(line: string): number | null {
+  const nm = line.match(/\b(\d+)\b/);
+  if (nm) return parseInt(nm[1], 10);
+  const rm = line.match(/\b([IVXLC]+)\b/i);
+  if (rm) { const n = romanToNum(rm[1]); if (n > 0 && n < 200) return n; }
+  const lw = line.toLowerCase();
+  for (const [w, n] of Object.entries(WORD_NUMBERS)) { if (lw.includes(w)) return n; }
+  return null;
+}
+
+function isHeading(line: string): { is: boolean; title: string | null } {
+  const t = line.trim();
+  if (!t || t.length > 200) return { is: false, title: null };
+  for (const p of CHAPTER_HEADING_PATTERNS) {
+    const m = t.match(p);
+    if (m) return { is: true, title: m[1]?.trim() || null };
+  }
+  if (t === t.toUpperCase() && t.length > 2 && t.length < 80 && /[A-Z]/.test(t)) {
+    const ratio = (t.match(/[A-Z]/g) || []).length / t.length;
+    if (ratio > 0.5) return { is: true, title: t };
+  }
+  return { is: false, title: null };
+}
+
+function splitChapters(text: string): ChapterSegment[] {
+  const lines = text.split('\n');
+  const breaks: Array<{ lineIndex: number; title: string | null }> = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const prev = i > 0 ? lines[i - 1].trim() : '';
+    const result = isHeading(line);
+    if (result.is && (!prev || i === 0)) {
+      breaks.push({ lineIndex: i, title: result.title });
+    }
+  }
+
+  // Fallback: split every ~5000 words
+  if (breaks.length < 2) {
+    const words = text.split(/\s+/).filter(w => w.length > 0);
+    const segs: ChapterSegment[] = [];
+    for (let i = 0; i < words.length; i += 5000) {
+      const chunk = words.slice(i, i + 5000);
+      segs.push({
+        chapter_number: Math.floor(i / 5000) + 1,
+        title: null,
+        content: chunk.join(' '),
+        word_count: chunk.length,
+      });
+    }
+    return segs;
+  }
+
+  const chapters: ChapterSegment[] = [];
+  // Prologue
+  if (breaks[0].lineIndex > 0) {
+    const pro = lines.slice(0, breaks[0].lineIndex).join('\n').trim();
+    const wc = pro.split(/\s+/).filter(w => w.length > 0).length;
+    if (wc > 100) {
+      chapters.push({ chapter_number: 0, title: 'Prologue', content: pro, word_count: wc });
+    }
+  }
+  for (let i = 0; i < breaks.length; i++) {
+    const start = breaks[i].lineIndex;
+    const end = i + 1 < breaks.length ? breaks[i + 1].lineIndex : lines.length;
+    const content = lines.slice(start + 1, end).join('\n').trim();
+    const wc = content.split(/\s+/).filter(w => w.length > 0).length;
+    chapters.push({
+      chapter_number: extractNum(lines[start]) || (i + 1),
+      title: breaks[i].title,
+      content,
+      word_count: wc,
+    });
+  }
+  return chapters;
+}
+
+async function callLLM(
+  proxyUrl: string,
+  systemMessage: string,
+  userMessage: string,
+  maxTokens: number = 8000,
+  retries: number = 2
+): Promise<string> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 180000); // 3 min
+      try {
+        const res = await fetch(`${proxyUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'anthropic/claude-sonnet-4',
+            messages: [
+              { role: 'system', content: systemMessage },
+              { role: 'user', content: userMessage },
+            ],
+            max_tokens: maxTokens,
+            temperature: 0.2,
+          }),
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          throw new Error(`Proxy error ${res.status}: ${errText.slice(0, 200)}`);
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data = await res.json() as any;
+        return data.choices?.[0]?.message?.content || '';
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (err) {
+      if (attempt === retries) throw err;
+      console.warn(`[novel-import] LLM call attempt ${attempt + 1} failed, retrying in ${(attempt + 1) * 5}s...`);
+      await new Promise(r => setTimeout(r, (attempt + 1) * 5000));
+    }
+  }
+  throw new Error('LLM call exhausted retries');
+}
+
+function parseJsonFromLLM(text: string): unknown {
+  // Strip markdown code fences if present
+  const cleaned = text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+  return JSON.parse(cleaned);
+}
+
+const CHAPTER_ANALYSIS_SYSTEM = `You are a literary analyst. You analyze novel chapters and extract structured data.
+Always respond with valid JSON only — no markdown, no explanations outside the JSON.`;
+
+function buildChapterPrompt(chapter: ChapterSegment, chapterCount: number): string {
+  // Truncate very long chapters to ~48K chars (~12K words) for LLM context
+  const maxChars = 48000;
+  const content = chapter.content.length > maxChars
+    ? chapter.content.slice(0, maxChars) + '\n\n[... content truncated for analysis ...]'
+    : chapter.content;
+
+  return `Analyze chapter ${chapter.chapter_number} of ${chapterCount} (${chapter.word_count} words).
+${chapter.title ? `Chapter title: "${chapter.title}"` : ''}
+
+Extract the following as JSON:
+{
+  "synopsis": "2-3 sentence synopsis of this chapter",
+  "pov_character": "name of the POV character or null if omniscient",
+  "beats": [
+    {
+      "beat_number": 1,
+      "beat_type": "scene|transition|flashback|action|dialogue|reflection|revelation",
+      "synopsis": "1 sentence describing this scene/beat",
+      "start_paragraph": 1,
+      "approximate_word_count": 1200
+    }
+  ],
+  "characters_mentioned": [
+    {
+      "name": "full character name as it appears",
+      "role_hint": "protagonist|antagonist|supporting|minor|mentioned",
+      "actions": "brief summary of what this character does in this chapter"
+    }
+  ],
+  "plot_developments": ["key plot point 1", "key plot point 2"]
+}
+
+Rules for beat segmentation:
+- Create a new beat at: setting changes, significant time jumps, POV shifts, or major dramatic tension shifts
+- Target ~1000-1500 words per beat
+- Each beat should be a self-contained scene or moment
+
+CHAPTER TEXT:
+${content}`;
+}
+
+const SYNTHESIS_SYSTEM = `You are a literary analyst performing cross-chapter synthesis.
+Deduplicate characters, identify plot arcs, and classify relationships.
+Always respond with valid JSON only.`;
+
+function buildSynthesisPrompt(
+  chapterAnalyses: ChapterAnalysis[],
+  originalFilename: string
+): string {
+  // Build compact summaries
+  const charSummaries = new Map<string, { chapters: number[]; roles: string[]; actions: string[] }>();
+  const plotPoints: Array<{ chapter: number; point: string }> = [];
+
+  for (const ch of chapterAnalyses) {
+    for (const c of ch.characters_mentioned) {
+      const existing = charSummaries.get(c.name) || { chapters: [], roles: [], actions: [] };
+      existing.chapters.push(ch.chapter_number);
+      existing.roles.push(c.role_hint);
+      existing.actions.push(c.actions);
+      charSummaries.set(c.name, existing);
+    }
+    for (const p of ch.plot_developments) {
+      plotPoints.push({ chapter: ch.chapter_number, point: p });
+    }
+  }
+
+  const charList = Array.from(charSummaries.entries())
+    .map(([name, data]) => `- ${name}: appears in chapters [${data.chapters.join(',')}], roles=[${[...new Set(data.roles)].join(',')}], key actions: ${data.actions.slice(0, 3).join('; ')}`)
+    .join('\n');
+
+  const plotList = plotPoints
+    .map(p => `- Ch${p.chapter}: ${p.point}`)
+    .join('\n');
+
+  return `Novel: "${originalFilename}"
+Total chapters: ${chapterAnalyses.length}
+Total words: ${chapterAnalyses.reduce((s, c) => s + c.word_count, 0)}
+
+CHARACTER MENTIONS (may contain duplicates/aliases):
+${charList}
+
+PLOT DEVELOPMENTS BY CHAPTER:
+${plotList}
+
+Synthesize into JSON:
+{
+  "characters": [
+    {
+      "character_name": "canonical full name",
+      "role": "protagonist|antagonist|supporting|minor",
+      "backstory": "inferred backstory from text (2-3 sentences)",
+      "motivations": "character motivations (1-2 sentences)",
+      "personality_traits": "comma-separated traits",
+      "speaking_style": "description of how they speak",
+      "age_range": "approximate age or null",
+      "aliases": ["other names/nicknames used in the text"]
+    }
+  ],
+  "plot_threads": [
+    {
+      "name": "descriptive thread name",
+      "description": "what this thread is about (1-2 sentences)",
+      "importance": "primary|secondary|tertiary",
+      "thread_type": "main_plot|subplot|romance|mystery|character_arc|theme",
+      "characters_involved": ["character names"],
+      "introduced_chapter": 1,
+      "resolved_chapter": null,
+      "status": "active|resolved|abandoned|cliffhanger"
+    }
+  ]
+}
+
+Rules:
+- Deduplicate characters: merge "Tom" / "Thomas" / "Mr. Smith" into one entry with aliases
+- Classify at most 2 protagonists and 2 antagonists
+- Identify 3-8 plot threads (primary threads must span multiple chapters)
+- Use canonical names consistently`;
+}
+
+export const prosecreatorNovelImport = task({
+  id: 'prosecreator-novel-import',
+  retry: {
+    maxAttempts: 2,
+    minTimeoutInMs: 10000,
+    maxTimeoutInMs: 1800000, // 30 min
+    factor: 2,
+  },
+  run: async (payload: NovelImportPayload): Promise<NovelImportResult> => {
+    const startTime = Date.now();
+    const proxyUrl = process.env.CLAUDE_CODE_MAX_PROXY_URL || 'http://claude-code-proxy:3100';
+
+    console.log(
+      `[novel-import] Starting: doc=${payload.documentId}, file=${payload.originalFilename}, contentLen=${payload.extractedContent.length}`
+    );
+
+    // Pass 1: Structural chapter splitting (regex, no LLM)
+    console.log('[novel-import] Pass 1: Splitting chapters...');
+    const chapters = splitChapters(payload.extractedContent);
+    console.log(`[novel-import] Detected ${chapters.length} chapters`);
+
+    // Pass 2: Per-chapter LLM analysis (sequential)
+    console.log('[novel-import] Pass 2: Analyzing chapters sequentially...');
+    const chapterAnalyses: ChapterAnalysis[] = [];
+
+    for (let i = 0; i < chapters.length; i++) {
+      const ch = chapters[i];
+      console.log(`[novel-import] Analyzing chapter ${i + 1}/${chapters.length} (${ch.word_count} words)...`);
+
+      try {
+        const prompt = buildChapterPrompt(ch, chapters.length);
+        const response = await callLLM(proxyUrl, CHAPTER_ANALYSIS_SYSTEM, prompt, 8000);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const parsed = parseJsonFromLLM(response) as any;
+
+        // Build beat content by splitting chapter content
+        const beats: ChapterAnalysis['beats'] = [];
+        if (parsed.beats && Array.isArray(parsed.beats)) {
+          const totalBeats = parsed.beats.length;
+          const wordsPerBeat = Math.ceil(ch.word_count / totalBeats);
+          const words = ch.content.split(/\s+/);
+
+          for (let b = 0; b < totalBeats; b++) {
+            const startIdx = b * wordsPerBeat;
+            const endIdx = Math.min((b + 1) * wordsPerBeat, words.length);
+            const beatContent = words.slice(startIdx, endIdx).join(' ');
+
+            beats.push({
+              beat_number: b + 1,
+              beat_type: parsed.beats[b]?.beat_type || 'scene',
+              content: beatContent,
+              word_count: endIdx - startIdx,
+            });
+          }
+        } else {
+          // Fallback: single beat for the whole chapter
+          beats.push({
+            beat_number: 1,
+            beat_type: 'scene',
+            content: ch.content,
+            word_count: ch.word_count,
+          });
+        }
+
+        chapterAnalyses.push({
+          chapter_number: ch.chapter_number,
+          title: ch.title || parsed.title || null,
+          synopsis: parsed.synopsis || '',
+          pov_character: parsed.pov_character || null,
+          content: ch.content,
+          word_count: ch.word_count,
+          beats,
+          characters_mentioned: parsed.characters_mentioned || [],
+          plot_developments: parsed.plot_developments || [],
+        });
+      } catch (err) {
+        console.error(`[novel-import] Chapter ${i + 1} analysis failed:`, err);
+        // Continue with raw chapter data on failure
+        chapterAnalyses.push({
+          chapter_number: ch.chapter_number,
+          title: ch.title,
+          synopsis: '',
+          pov_character: null,
+          content: ch.content,
+          word_count: ch.word_count,
+          beats: [{
+            beat_number: 1,
+            beat_type: 'scene',
+            content: ch.content,
+            word_count: ch.word_count,
+          }],
+          characters_mentioned: [],
+          plot_developments: [],
+        });
+      }
+    }
+
+    // Pass 3: Cross-chapter synthesis
+    console.log('[novel-import] Pass 3: Cross-chapter synthesis...');
+    let characters: NovelImportResult['characters'] = [];
+    let plotThreads: NovelImportResult['plot_threads'] = [];
+
+    try {
+      const synthPrompt = buildSynthesisPrompt(chapterAnalyses, payload.originalFilename);
+      const synthResponse = await callLLM(proxyUrl, SYNTHESIS_SYSTEM, synthPrompt, 12000);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const synthParsed = parseJsonFromLLM(synthResponse) as any;
+
+      characters = synthParsed.characters || [];
+      plotThreads = synthParsed.plot_threads || [];
+    } catch (err) {
+      console.error('[novel-import] Synthesis failed:', err);
+      // Extract basic character list from chapter analyses as fallback
+      const charSet = new Set<string>();
+      for (const ch of chapterAnalyses) {
+        for (const c of ch.characters_mentioned) {
+          charSet.add(c.name);
+        }
+      }
+      characters = Array.from(charSet).map(name => ({
+        character_name: name,
+        role: 'supporting' as const,
+        backstory: '',
+        motivations: '',
+        personality_traits: '',
+        speaking_style: '',
+        age_range: null,
+        aliases: [],
+      }));
+    }
+
+    const processingTimeMs = Date.now() - startTime;
+    console.log(
+      `[novel-import] Complete: ${chapterAnalyses.length} chapters, ${characters.length} characters, ${plotThreads.length} plot threads in ${processingTimeMs}ms`
+    );
+
+    return {
+      chapters: chapterAnalyses,
+      characters,
+      plot_threads: plotThreads,
+      metadata: {
+        total_words: chapterAnalyses.reduce((s, c) => s + c.word_count, 0),
+        chapters_detected: chapterAnalyses.length,
+        characters_found: characters.length,
+        plot_threads_found: plotThreads.length,
+        processing_time_ms: processingTimeMs,
+      },
+    };
   },
 });
