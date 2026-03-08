@@ -50,6 +50,10 @@ const SKIP_HEALTH_PROBE = new Set(['kubernetes', 'kube-dns']);
 const PORT_HEALTH_OVERRIDES: Record<string, string> = {
   'nexus-email-connector': '/api/health',
   'nexus-trigger': '/trigger/health',
+  'cvat': '/api/server/about',
+  'nexus-minio': '/minio/health/live',
+  'triton': '/v2/health/ready',
+  'nexus-prosecreator-audiobook': '/api/health',
 };
 
 // ---------------------------------------------------------------------------
@@ -213,8 +217,19 @@ export class PlatformHealthMonitor {
         }
 
         if (pod.restartCount >= this.thresholds.podRestartThreshold) {
-          status = 'degraded';
-          message += ` | ${pod.restartCount} restarts`;
+          // Use restart rate (restarts/hour) instead of absolute count.
+          // A pod running 31 days with 4 restarts (0.005/hr) is healthy;
+          // a pod running 10 minutes with 4 restarts (24/hr) is not.
+          const ageHours = pod.startTime
+            ? (Date.now() - new Date(pod.startTime).getTime()) / 3_600_000
+            : 0;
+          const restartsPerHour = ageHours > 1 ? pod.restartCount / ageHours : pod.restartCount;
+
+          if (restartsPerHour > 0.5) {
+            status = 'degraded';
+            message += ` | ${pod.restartCount} restarts (${restartsPerHour.toFixed(2)}/hr)`;
+          }
+          // else: accumulated restarts over days/weeks — normal lifecycle, don't flag
         }
 
         // Check for OOMKilled or CrashLoopBackOff in conditions
@@ -550,12 +565,25 @@ export class PlatformHealthMonitor {
           continue; // Try next path (404 means this path doesn't exist)
         }
 
-        // 5xx or last path — report as degraded
+        if (res.status >= 500) {
+          // 5xx — service is genuinely unhealthy
+          return {
+            component: `service:${ns}/${svc.name}`,
+            category: 'service-endpoint',
+            status: 'unhealthy',
+            message: `${path} → ${res.status}`,
+            latencyMs: Date.now() - start,
+            details: { port: httpPort.port, path, statusCode: res.status },
+          };
+        }
+
+        // 4xx on last (fallback) path — service responded but has no health
+        // endpoint. 403/404/410 on `/` is expected for many services.
         return {
           component: `service:${ns}/${svc.name}`,
           category: 'service-endpoint',
-          status: res.status >= 500 ? 'unhealthy' : 'degraded',
-          message: `${path} → ${res.status}`,
+          status: 'unknown',
+          message: `No health endpoint found (${path} → ${res.status})`,
           latencyMs: Date.now() - start,
           details: { port: httpPort.port, path, statusCode: res.status },
         };
@@ -814,7 +842,10 @@ export class PlatformHealthMonitor {
         let message = `Status: ${pvc.status}, Capacity: ${pvc.capacity}`;
 
         if (pvc.status !== 'Bound') {
-          status = 'unhealthy';
+          // Pending PVCs with WaitForFirstConsumer are normal K8s behavior —
+          // they stay Pending until a pod mounts them. Downgrade to degraded
+          // (not unhealthy) since this is expected for unused PVCs.
+          status = pvc.status === 'Lost' ? 'unhealthy' : 'degraded';
           message = `PVC not bound: ${pvc.status}`;
         }
 
@@ -838,8 +869,21 @@ export class PlatformHealthMonitor {
   // -----------------------------------------------------------------------
 
   private async checkEmailService(): Promise<HealthCheck[]> {
-    // The email connector will be caught by the dynamic service endpoint
-    // probe. This method adds specific email-capability checks.
+    // Check if deployment is scaled to 0 — if so, skip probing
+    try {
+      const deploys = await this.k8s.listDeployments(NAMESPACE);
+      const emailDeploy = deploys.find((d) => d.name === 'nexus-email-connector');
+      if (emailDeploy && emailDeploy.desiredReplicas === 0) {
+        return [{
+          component: 'email:connector',
+          category: 'email',
+          status: 'skipped',
+          message: 'Deployment scaled to 0 replicas',
+          latencyMs: 0,
+        }];
+      }
+    } catch { /* fall through to normal check */ }
+
     const emailHost = process.env.EMAIL_CONNECTOR_URL || `http://nexus-email-connector.${NAMESPACE}.svc.cluster.local:3010`;
     const check = await this.httpHealthCheck('email:connector', 'email', `${emailHost}/api/health`);
     return [check];
@@ -851,7 +895,7 @@ export class PlatformHealthMonitor {
 
   private async checkPluginSystem(): Promise<HealthCheck[]> {
     const checks: HealthCheck[] = [];
-    const pluginsUrl = process.env.PLUGINS_API_URL || `http://nexus-plugins.${NAMESPACE}.svc.cluster.local:9080`;
+    const pluginsUrl = process.env.PLUGINS_API_URL || `http://nexus-plugins.${NAMESPACE}.svc.cluster.local:9111`;
 
     // Check plugins service health
     const pluginsHealth = await this.httpHealthCheck(
