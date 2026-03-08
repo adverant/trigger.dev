@@ -11,7 +11,7 @@ import axios from 'axios';
 const DEFAULT_MODEL = 'gemini-2.5-pro';
 const GENERATION_TIMEOUT_MS = 120_000;
 const CLAUDE_PROXY_URL = process.env.CLAUDE_CODE_PROXY_URL || 'http://claude-code-proxy.nexus.svc.cluster.local:3100';
-const CLAUDE_PROXY_MODEL = process.env.CLAUDE_PROXY_MODEL || 'claude-sonnet-4-5-20250514';
+const CLAUDE_PROXY_MODEL = process.env.CLAUDE_PROXY_MODEL || 'claude-sonnet-4-20250514';
 const CLAUDE_PROXY_TIMEOUT_MS = 300_000;
 
 export interface GeminiResponse {
