@@ -878,60 +878,70 @@ export class TaskService {
     const taskPayload = payload?.payload || payload;
 
     // Run async — don't block the HTTP response
-    const handler = new ProseCreatorTaskHandler(orgId, userId);
-    handler.generateBlueprint(taskPayload)
-      .then(async (result) => {
-        await this.runRepo.updateStatus(run.runId, 'COMPLETED', {
-          blueprint: result.blueprint,
-          durationMs: result.durationMs,
-          model: result.model,
-          promptTokens: result.promptTokens,
-          completionTokens: result.completionTokens,
+    if (taskId === 'prosecreator-panel-analysis' || taskId === 'prosecreator-novel-import') {
+      // Panel analysis and novel import use their own LLM calls with custom prompts.
+      // Route directly through Claude Max Proxy instead of the blueprint handler.
+      this.handlePanelAnalysisTask(run.runId, triggerRunId, taskId, taskPayload, orgId)
+        .catch((err) => {
+          logger.error('Panel analysis async handler error', { taskId, runId: run.runId, error: String(err) });
         });
+    } else {
+      // All other prosecreator tasks use the blueprint handler
+      const handler = new ProseCreatorTaskHandler(orgId, userId);
+      handler.generateBlueprint(taskPayload)
+        .then(async (result) => {
+          await this.runRepo.updateStatus(run.runId, 'COMPLETED', {
+            blueprint: result.blueprint,
+            durationMs: result.durationMs,
+            model: result.model,
+            promptTokens: result.promptTokens,
+            completionTokens: result.completionTokens,
+          });
 
-        emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
-          taskId,
-          runId: run.runId,
-          triggerRunId,
-          status: 'COMPLETED',
-          output: result.blueprint,
+          emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+            taskId,
+            runId: run.runId,
+            triggerRunId,
+            status: 'COMPLETED',
+            output: result.blueprint,
+          });
+
+          this.writeLog(orgId, run.runId, taskId, 'INFO', `ProseCreator task completed`, { durationMs: result.durationMs, model: result.model });
+
+          logger.info('ProseCreator task completed', {
+            taskId, runId: run.runId, durationMs: result.durationMs,
+            contentSize: JSON.stringify(result.blueprint).length,
+          });
+        })
+        .catch(async (err) => {
+          const structured = (err as any).structuredError || classifyError(err, 'prosecreator');
+          const errMsg = structured.message;
+
+          await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, errMsg);
+          await this.runRepo.mergeMetadata(run.runId, { structuredError: structured }).catch(() => {});
+
+          this.writeLog(orgId, run.runId, taskId, 'ERROR', `ProseCreator task failed: ${errMsg}`, {
+            errorCode: structured.code,
+            errorCategory: structured.category,
+          });
+
+          emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+            taskId,
+            runId: run.runId,
+            triggerRunId,
+            status: 'FAILED',
+            error: errMsg,
+            structuredError: structured,
+          });
+
+          logger.error('ProseCreator task failed', {
+            taskId, runId: run.runId,
+            error: errMsg,
+            errorCode: structured.code,
+            errorCategory: structured.category,
+          });
         });
-
-        this.writeLog(orgId, run.runId, taskId, 'INFO', `ProseCreator task completed`, { durationMs: result.durationMs, model: result.model });
-
-        logger.info('ProseCreator task completed', {
-          taskId, runId: run.runId, durationMs: result.durationMs,
-          contentSize: JSON.stringify(result.blueprint).length,
-        });
-      })
-      .catch(async (err) => {
-        const structured = (err as any).structuredError || classifyError(err, 'prosecreator');
-        const errMsg = structured.message;
-
-        await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, errMsg);
-        await this.runRepo.mergeMetadata(run.runId, { structuredError: structured }).catch(() => {});
-
-        this.writeLog(orgId, run.runId, taskId, 'ERROR', `ProseCreator task failed: ${errMsg}`, {
-          errorCode: structured.code,
-          errorCategory: structured.category,
-        });
-
-        emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
-          taskId,
-          runId: run.runId,
-          triggerRunId,
-          status: 'FAILED',
-          error: errMsg,
-          structuredError: structured,
-        });
-
-        logger.error('ProseCreator task failed', {
-          taskId, runId: run.runId,
-          error: errMsg,
-          errorCode: structured.code,
-          errorCategory: structured.category,
-        });
-      });
+    }
 
     return {
       id: triggerRunId,
@@ -940,6 +950,126 @@ export class TaskService {
       localRunId: run.runId,
       taskId,
     };
+  }
+
+  /**
+   * Handle panel analysis tasks by calling Claude Max Proxy directly with
+   * the caller-supplied system message and prompt. Stores result with
+   * `content` key (not `blueprint`) so the prosecreator polling code can
+   * extract it via `output.content`.
+   */
+  private async handlePanelAnalysisTask(
+    runId: string,
+    triggerRunId: string,
+    taskId: string,
+    payload: any,
+    orgId: string,
+  ): Promise<void> {
+    const startTime = Date.now();
+    const proxyUrl = process.env.CLAUDE_CODE_PROXY_URL
+      || process.env.LLM_CLAUDE_CODE_PROXY_URL
+      || 'http://claude-code-proxy.nexus.svc.cluster.local:3100';
+    const model = process.env.CLAUDE_BLUEPRINT_MODEL || 'claude-opus-4-6';
+
+    const systemMessage = payload.systemMessage || '';
+    const prompt = payload.prompt || '';
+    const maxTokens = payload.maxTokens || 8000;
+    const temperature = payload.temperature ?? 0.3;
+
+    logger.info('Panel analysis task starting', {
+      taskId, runId, orgId,
+      analysisType: payload.analysisType,
+      promptLen: prompt.length,
+      maxTokens,
+    });
+
+    try {
+      const controller = new AbortController();
+      const fetchTimeoutMs = maxTokens > 16000 ? 480000 : 150000;
+      const timeout = setTimeout(() => controller.abort(), fetchTimeoutMs);
+
+      let res: any;
+      try {
+        const fetchRes = await fetch(`${proxyUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: 'system', content: systemMessage },
+              { role: 'user', content: prompt },
+            ],
+            max_tokens: maxTokens,
+            temperature,
+          }),
+          signal: controller.signal,
+        });
+
+        if (!fetchRes.ok) {
+          const errText = await fetchRes.text().catch(() => '');
+          throw new Error(`Claude proxy error ${fetchRes.status}: ${errText.slice(0, 300)}`);
+        }
+
+        res = await fetchRes.json();
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      const content = res.choices?.[0]?.message?.content || '';
+      const durationMs = Date.now() - startTime;
+
+      logger.info('Panel analysis task completed', {
+        taskId, runId, orgId,
+        analysisType: payload.analysisType,
+        durationMs,
+        contentLen: content.length,
+        finishReason: res.choices?.[0]?.finish_reason,
+        model: res.model,
+      });
+
+      await this.runRepo.updateStatus(runId, 'COMPLETED', {
+        content,
+        model: res.model || model,
+        usage: res.usage || {},
+        analysisType: payload.analysisType,
+        durationMs,
+      });
+
+      emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+        taskId,
+        runId,
+        triggerRunId,
+        status: 'COMPLETED',
+      });
+
+      this.writeLog(orgId, runId, taskId, 'INFO', `Panel analysis completed`, {
+        durationMs,
+        contentLen: content.length,
+        analysisType: payload.analysisType,
+      });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const durationMs = Date.now() - startTime;
+
+      logger.error('Panel analysis task failed', {
+        taskId, runId, orgId,
+        analysisType: payload.analysisType,
+        error: errMsg,
+        durationMs,
+      });
+
+      await this.runRepo.updateStatus(runId, 'FAILED', undefined, errMsg);
+
+      emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+        taskId,
+        runId,
+        triggerRunId,
+        status: 'FAILED',
+        error: errMsg,
+      });
+
+      this.writeLog(orgId, runId, taskId, 'ERROR', `Panel analysis failed: ${errMsg}`);
+    }
   }
 
   async batchTrigger(
