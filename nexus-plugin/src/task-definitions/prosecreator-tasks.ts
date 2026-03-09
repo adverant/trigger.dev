@@ -420,7 +420,7 @@ export const prosecreatorPanelAnalysis = task({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-opus-4-6',
           messages: [
             { role: 'system', content: payload.systemMessage },
             { role: 'user', content: payload.prompt },
@@ -653,7 +653,7 @@ async function callLLM(
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: 'claude-sonnet-4-20250514',
+            model: 'claude-opus-4-6',
             messages: [
               { role: 'system', content: systemMessage },
               { role: 'user', content: userMessage },
