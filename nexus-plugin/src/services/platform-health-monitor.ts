@@ -209,7 +209,11 @@ export class PlatformHealthMonitor {
         let status: ComponentStatus = 'healthy';
         let message = `Phase: ${pod.phase}, Ready: ${pod.readyContainers}/${pod.totalContainers}`;
 
-        if (pod.phase !== 'Running' && pod.phase !== 'Succeeded') {
+        if (pod.phase === 'Succeeded') {
+          // Completed Job/CronJob pods — 0 ready containers is expected
+          status = 'healthy';
+          message = `Phase: Succeeded (completed)`;
+        } else if (pod.phase !== 'Running') {
           status = 'unhealthy';
           message = `Phase: ${pod.phase}`;
         } else if (pod.readyContainers < pod.totalContainers) {
@@ -913,20 +917,54 @@ export class PlatformHealthMonitor {
 
       for (const plugin of plugins) {
         if (!plugin.endpoint) continue;
-        const start = Date.now();
-        try {
-          const pRes = await axios.get(`${plugin.endpoint}/health`, {
-            timeout: HEALTH_CHECK_TIMEOUT_MS,
-            validateStatus: () => true,
-          });
+
+        // Skip suspended/deprecated plugins — they are intentionally offline
+        if (plugin.status === 'suspended' || plugin.status === 'deprecated') {
           checks.push({
             component: `plugin:${plugin.name || plugin.id}`,
             category: 'plugin-system',
-            status: pRes.status >= 200 && pRes.status < 400 ? 'healthy' : 'degraded',
-            message: `${plugin.name}: ${pRes.status}`,
+            status: 'skipped',
+            message: `${plugin.name}: ${plugin.status} (skipped)`,
+            latencyMs: 0,
+          });
+          continue;
+        }
+
+        const start = Date.now();
+        // Try common health endpoint paths — plugins use different conventions
+        const healthPaths = ['/health', '/api/health', '/healthz'];
+        let bestRes: { status: number; path: string } | null = null;
+
+        for (const path of healthPaths) {
+          try {
+            const pRes = await axios.get(`${plugin.endpoint}${path}`, {
+              timeout: HEALTH_CHECK_TIMEOUT_MS,
+              validateStatus: () => true,
+            });
+            // Accept first successful response, or keep trying on 404
+            if (pRes.status !== 404) {
+              bestRes = { status: pRes.status, path };
+              break;
+            }
+            if (!bestRes) bestRes = { status: pRes.status, path };
+          } catch {
+            // Network error — endpoint unreachable, no point trying more paths
+            break;
+          }
+        }
+
+        if (bestRes) {
+          // 401/403 means service is up but requires auth — treat as healthy
+          const isUp = bestRes.status >= 200 && bestRes.status < 400;
+          const isAuthRequired = bestRes.status === 401 || bestRes.status === 403;
+          checks.push({
+            component: `plugin:${plugin.name || plugin.id}`,
+            category: 'plugin-system',
+            status: isUp || isAuthRequired ? 'healthy' : 'degraded',
+            message: `${plugin.name}: ${bestRes.status}${isAuthRequired ? ' (auth required)' : ''}`,
             latencyMs: Date.now() - start,
           });
-        } catch {
+        } else {
           checks.push({
             component: `plugin:${plugin.name || plugin.id}`,
             category: 'plugin-system',
