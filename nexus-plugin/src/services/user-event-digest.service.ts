@@ -95,7 +95,7 @@ export class UserEventDigestService {
       await axios.post(
         RESEND_API_URL,
         {
-          from: 'Nexus Platform <alerts@adverant.ai>',
+          from: 'Nexus Platform <billing@adverant.ai>',
           to: [NOTIFICATION_EMAIL],
           subject: rendered.subject,
           html: rendered.html,
