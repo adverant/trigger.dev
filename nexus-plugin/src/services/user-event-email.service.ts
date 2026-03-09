@@ -252,7 +252,7 @@ export class UserEventEmailService {
           text: rendered.text,
           tags: [
             { name: 'type', value: 'user-event' },
-            { name: 'event', value: data.eventType },
+            { name: 'event', value: data.eventType.replace(/\./g, '-') },
           ],
         },
         {
