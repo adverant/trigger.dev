@@ -6,6 +6,8 @@ import { SkillsEngineTaskHandler } from './skills-engine-task-handler';
 import { ProseCreatorTaskHandler } from './prosecreator-task-handler';
 import { syncPlatformKnowledge } from '../task-definitions/platform-knowledge-tasks';
 import { runPlatformHealthCheck, shouldTriggerRemediation, runPlatformHealthRemediation } from '../task-definitions/platform-health-tasks';
+import { UserEventEmailService, WebhookEventPayload } from './user-event-email.service';
+import { UserEventDigestService } from './user-event-digest.service';
 import { ProjectRepository, Project } from '../database/repositories/project.repository';
 import { RunRepository, CreateRunData } from '../database/repositories/run.repository';
 import { TaskDefinitionRepository, UpsertTaskDefinitionData } from '../database/repositories/task-definition.repository';
@@ -108,6 +110,11 @@ export class TaskService {
     // Platform Health Monitor tasks run locally
     if (taskId.startsWith('platform-health-')) {
       return this.handlePlatformHealthTask(orgId, userId, projectId, taskId, payload, options);
+    }
+
+    // User Event Notification tasks run locally
+    if (taskId.startsWith('user-event-')) {
+      return this.handleUserEventTask(orgId, userId, projectId, taskId, payload, options);
     }
 
     const result = await this.proxy.triggerTask(taskId, payload, options);
@@ -673,6 +680,119 @@ export class TaskService {
 
           logger.error('Platform health remediation failed', { taskId, runId: run.runId, error: err.message });
         });
+    }
+
+    return {
+      id: triggerRunId,
+      runId: triggerRunId,
+      status: 'EXECUTING',
+      localRunId: run.runId,
+      taskId,
+    };
+  }
+
+  /**
+   * Handle User Event tasks in-process — processes webhook events and sends
+   * notification emails via Resend, or runs the daily digest.
+   */
+  private async handleUserEventTask(
+    orgId: string,
+    userId: string,
+    projectId: string,
+    taskId: string,
+    payload: any,
+    options?: TriggerTaskOptions
+  ): Promise<any> {
+    const triggerRunId = `ue-${randomUUID()}`;
+    const startedAt = new Date();
+
+    const run = await this.runRepo.create({
+      triggerRunId,
+      projectId,
+      organizationId: orgId,
+      taskIdentifier: taskId,
+      status: 'EXECUTING',
+      payload,
+      startedAt,
+      idempotencyKey: options?.idempotencyKey,
+      metadata: { ...options?.metadata, source: 'user-event' },
+      tags: options?.tags || ['user-event'],
+    });
+
+    await this.usageRepo.record(orgId, 'task_trigger', {
+      taskId,
+      projectId,
+      runId: run.runId,
+    });
+
+    triggerTasksTriggered.inc({ task_id: taskId, organization_id: orgId });
+
+    emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+      taskId,
+      runId: run.runId,
+      triggerRunId,
+      status: 'EXECUTING',
+    });
+
+    const pool = this.dbPool;
+
+    if (taskId === 'user-event-notification' && pool) {
+      // Process a single event notification
+      const emailService = new UserEventEmailService(pool);
+      emailService.processEvent(payload as WebhookEventPayload)
+        .then(async () => {
+          await this.runRepo.updateStatus(run.runId, 'COMPLETED', {
+            eventType: payload?.event_type,
+            email: payload?.user?.email,
+          });
+
+          emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+            taskId, runId: run.runId, triggerRunId, status: 'COMPLETED',
+          });
+
+          this.writeLog(orgId, run.runId, taskId, 'INFO', `User event processed: ${payload?.event_type}`);
+          logger.info('User event task completed', { taskId, runId: run.runId, eventType: payload?.event_type });
+        })
+        .catch(async (err: any) => {
+          await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, err.message);
+          this.writeLog(orgId, run.runId, taskId, 'ERROR', `User event task failed: ${err.message}`);
+
+          emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+            taskId, runId: run.runId, triggerRunId, status: 'FAILED', error: err.message,
+          });
+
+          logger.error('User event task failed', { taskId, runId: run.runId, error: err.message });
+        });
+    } else if (taskId === 'user-event-daily-digest' && pool) {
+      // Run the daily digest
+      const digestService = new UserEventDigestService(pool);
+      digestService.runDailyDigest()
+        .then(async (result) => {
+          await this.runRepo.updateStatus(run.runId, 'COMPLETED', {
+            eventCount: result.eventCount,
+            emailSent: result.emailSent,
+          });
+
+          emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+            taskId, runId: run.runId, triggerRunId, status: 'COMPLETED',
+            output: { eventCount: result.eventCount, emailSent: result.emailSent },
+          });
+
+          this.writeLog(orgId, run.runId, taskId, 'INFO', `Daily digest completed: ${result.eventCount} events`);
+          logger.info('Daily digest completed', { taskId, runId: run.runId, ...result });
+        })
+        .catch(async (err: any) => {
+          await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, err.message);
+          this.writeLog(orgId, run.runId, taskId, 'ERROR', `Daily digest failed: ${err.message}`);
+
+          emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+            taskId, runId: run.runId, triggerRunId, status: 'FAILED', error: err.message,
+          });
+
+          logger.error('Daily digest failed', { taskId, runId: run.runId, error: err.message });
+        });
+    } else {
+      await this.runRepo.updateStatus(run.runId, 'FAILED', undefined, `Unknown user-event task: ${taskId}`);
     }
 
     return {

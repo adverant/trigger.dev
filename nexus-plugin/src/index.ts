@@ -40,6 +40,7 @@ import { createWorkflowRouter, createJobRouter } from './api/workflows';
 import { createErrorRouter } from './api/errors';
 import { createLogRouter } from './api/logs';
 import { createBatchRouter } from './api/batches';
+import { createAuthEventsRouter } from './api/auth-events';
 
 // Import services
 import { TriggerProxyService } from './services/trigger-proxy.service';
@@ -237,6 +238,9 @@ class NexusTriggerServer {
       // Setup metrics endpoint
       this.setupMetricsEndpoint();
 
+      // Setup auth event webhook (HMAC-verified, no JWT — must be before auth middleware)
+      this.setupAuthEventWebhook(this.db.getPool());
+
       // Setup API routes (auth required)
       this.setupApiRoutes(
         triggerProxy,
@@ -360,8 +364,15 @@ class NexusTriggerServer {
     // Compression
     this.app.use(compression());
 
-    // Body parsing
-    this.app.use(express.json({ limit: '10mb' }));
+    // Body parsing (verify callback preserves raw body for webhook HMAC verification)
+    this.app.use(express.json({
+      limit: '10mb',
+      verify: (req: any, _res, buf) => {
+        if (req.url?.startsWith('/trigger/webhooks')) {
+          req.rawBody = buf;
+        }
+      },
+    }));
     this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
     // Request logging
@@ -477,6 +488,13 @@ class NexusTriggerServer {
         res.status(500).end(err.message);
       }
     });
+  }
+
+  private setupAuthEventWebhook(pool: any): void {
+    // Auth event webhooks are HMAC-verified (no JWT required)
+    // Mounted before the auth-protected API routes
+    this.app.use('/trigger/webhooks', createAuthEventsRouter(pool));
+    logger.info('Auth event webhook endpoint mounted at /trigger/webhooks/auth-events');
   }
 
   private setupApiRoutes(
@@ -834,6 +852,46 @@ class NexusTriggerServer {
       });
     } catch (err: any) {
       logger.error('Failed to seed platform-health-monitor schedule', { error: err.message });
+    }
+
+    // --- User Event Daily Digest (8 AM UTC) ---
+    try {
+      const projects = await this.db.getPool().query(
+        'SELECT project_id, organization_id, user_id FROM trigger.projects LIMIT 1'
+      );
+      if (projects.rows.length === 0) return;
+      const { project_id, organization_id, user_id } = projects.rows[0];
+
+      const existing = await scheduleRepo.findByOrgId(organization_id, {
+        taskIdentifier: 'user-event-daily-digest',
+      });
+      if (existing.length > 0) {
+        logger.info('user-event-daily-digest schedule already exists', {
+          scheduleId: existing[0].scheduleId,
+          enabled: existing[0].enabled,
+        });
+        return;
+      }
+
+      const digestSchedule = await scheduleRepo.create({
+        projectId: project_id,
+        organizationId: organization_id,
+        userId: user_id,
+        taskIdentifier: 'user-event-daily-digest',
+        cronExpression: '0 8 * * *',
+        timezone: 'UTC',
+        description: 'Daily user event digest — summarizes signups, logins, subscription changes, security alerts',
+        payload: { reason: 'scheduled-daily-digest' },
+      });
+
+      this.scheduleExecutor.addSchedule(digestSchedule);
+
+      logger.info('Seeded user-event-daily-digest schedule', {
+        scheduleId: digestSchedule.scheduleId,
+        cron: '0 8 * * *',
+      });
+    } catch (err: any) {
+      logger.error('Failed to seed user-event-daily-digest schedule', { error: err.message });
     }
   }
 

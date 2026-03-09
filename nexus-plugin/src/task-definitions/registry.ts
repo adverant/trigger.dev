@@ -11,6 +11,7 @@ import { SKILLS_ENGINE_TASKS } from './skills-engine-tasks';
 import { PLATFORM_KNOWLEDGE_TASKS } from './platform-knowledge-tasks';
 import { PLATFORM_HEALTH_TASKS } from './platform-health-tasks';
 import { TRANSCRIPT_EXTRACTION_TASKS } from './transcript-extraction-tasks';
+import { USER_EVENT_TASKS } from './user-event-tasks';
 
 export interface TaskRegistryEntry {
   taskIdentifier: string;
@@ -443,6 +444,9 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
 
   // ── Transcript Extraction (1) ───────────────────────────────────────
   ...TRANSCRIPT_EXTRACTION_TASKS,
+
+  // ── User Event Notifications (2) ──────────────────────────────────
+  ...USER_EVENT_TASKS,
 ];
 
 /**
