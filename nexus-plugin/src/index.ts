@@ -465,7 +465,8 @@ class NexusTriggerServer {
         const health = await this.healthChecker.performHealthCheck({
           pool: this.db.getPool(),
           redis: this.redis,
-          triggerApiUrl: this.config.trigger.apiUrl,
+          // triggerApiUrl omitted — trigger-dev-webapp is not deployed in this cluster
+          memoryThreshold: 95,
         });
         const statusCode = health.status === 'healthy' ? 200 : health.status === 'degraded' ? 200 : 503;
         res.status(statusCode).json(health);
