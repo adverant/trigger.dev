@@ -399,7 +399,7 @@ export const prosecreatorPanelAnalysis = task({
   retry: {
     maxAttempts: 2,
     minTimeoutInMs: 3000,
-    maxTimeoutInMs: 180000,
+    maxTimeoutInMs: 600000,
     factor: 2,
   },
   run: async (payload: PanelAnalysisPayload): Promise<PanelAnalysisResult> => {
@@ -411,7 +411,9 @@ export const prosecreatorPanelAnalysis = task({
     );
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 150000); // 2.5 min
+    // Scale timeout with maxTokens — insight_resolve sends 32k tokens, needs more time
+    const fetchTimeoutMs = (payload.maxTokens || 8000) > 16000 ? 480000 : 150000;
+    const timeout = setTimeout(() => controller.abort(), fetchTimeoutMs);
 
     try {
       const res = await fetch(`${proxyUrl}/v1/chat/completions`, {
