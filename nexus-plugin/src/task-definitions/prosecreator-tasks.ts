@@ -440,12 +440,13 @@ export const prosecreatorPanelAnalysis = task({
       const data = await res.json() as any;
       const durationMs = Date.now() - startTime;
 
+      const extractedContent = data.choices?.[0]?.message?.content || '';
       console.log(
-        `[prosecreator] Panel analysis complete: type=${payload.analysisType}, duration=${durationMs}ms, model=${data.model || 'unknown'}`
+        `[prosecreator] Panel analysis complete: type=${payload.analysisType}, duration=${durationMs}ms, model=${data.model || 'unknown'}, contentLen=${extractedContent.length}, hasChoices=${!!data.choices}, choicesLen=${data.choices?.length || 0}, finishReason=${data.choices?.[0]?.finish_reason || 'none'}, contentPreview=${extractedContent.slice(0, 200)}`
       );
 
       return {
-        content: data.choices?.[0]?.message?.content || '',
+        content: extractedContent,
         model: data.model || 'unknown',
         usage: data.usage || {},
         analysisType: payload.analysisType,
