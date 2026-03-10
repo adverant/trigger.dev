@@ -1,4 +1,6 @@
-# CLAUDE.md
+# Nexus Workflows (Trigger.dev) — Task Execution Engine
+
+> Global directives (integrity, deploy ordering, code review, web debugging) are in `~/.claude/CLAUDE.md`.
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -301,3 +303,36 @@ mcp__trigger__list_runs(
 ### Key Project Refs
 
 - hello-world: `proj_rrkpdguyagvsoktglnod`
+
+---
+
+# MEMORY PERSISTENCE — POST-COMMIT & POST-DEPLOY
+
+After EVERY `git commit` and after EVERY deployment (`/build-deploy` or manual):
+1. **Spawn a background agent** (`run_in_background: true`) to run `/nexus-memory` skill — do NOT block the user's workflow
+2. The background agent stores **episodic memory** with: what was changed, why, commit hash, deploy status, any errors encountered
+3. Tag with: project name, branch, date, "commit" or "deploy"
+4. This is NON-OPTIONAL — do not skip even if the task seems minor
+5. Continue working on the next task immediately — the memory persistence runs in parallel
+
+Purpose: Ensure build/deploy status and decisions persist across sessions for later recall, without interrupting workflow.
+
+---
+
+# REVIEW & MEMORY PROTOCOL
+
+> The two-gate review system (Memory Recall -> Gate 1 Plan Review -> Gate 2 Code Review + Gemini Assessment) and memory persistence instructions are defined in `~/.claude/CLAUDE.md`. Do not duplicate them here.
+
+---
+
+# BROWSER LOGIN HANDLING — NEVER CLOSE ON AUTH PAGES
+
+When using `/web-debug`, Playwright MCP, or any browser automation:
+- If you encounter a login page, authentication wall, or OAuth redirect: **STOP and WAIT**
+- Tell the user: "I've hit a login page. Please log in manually — I'll wait."
+- Do NOT close the browser, skip the test, or navigate away
+- Do NOT attempt to fill in credentials or bypass authentication
+- WAIT for the user to confirm they have logged in before continuing
+- After user confirms login, take a fresh snapshot and continue the task
+
+This applies to ALL browser interactions — debugging, testing, validation, screenshots.

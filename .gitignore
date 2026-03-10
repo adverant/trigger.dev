@@ -79,4 +79,5 @@ nexus-plugin/k8s/secrets.yaml
 nexus-plugin/.env
 nexus-plugin/.env.*
 !nexus-plugin/.env.example
-!nexus-plugin/k8s/secrets.yaml.example
+!nexus-plugin/k8s/secrets.yaml.examplenext-env.d.ts
+.playwright-mcp/
