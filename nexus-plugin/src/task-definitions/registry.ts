@@ -405,6 +405,13 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
     nexusService: 'prosecreator',
     retryConfig: { maxAttempts: 2, minTimeoutInMs: 10000, maxTimeoutInMs: 1800000, factor: 2 },
   },
+  // World-Building AI (dedicated task)
+  {
+    taskIdentifier: 'prosecreator-world-building',
+    description: 'AI-powered world-building: element generation, expansion, codex compilation, and consistency checking via Claude Code Max proxy',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 600000, factor: 2 },
+  },
   // Full Ingestion Pipeline (8 stages)
   {
     taskIdentifier: 'prosecreator-full-ingest-analyze',

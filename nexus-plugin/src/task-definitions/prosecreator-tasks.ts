@@ -974,6 +974,98 @@ export const prosecreatorNovelImport = task({
 });
 
 // ---------------------------------------------------------------------------
+// World-Building AI — dedicated task for element generation, expansion,
+// codex compilation, and consistency checking
+// ---------------------------------------------------------------------------
+
+export interface WorldBuildingPayload {
+  organizationId: string;
+  analysisType: 'world_element_generate' | 'world_element_expand' | 'world_codex_generate' | 'world_consistency_check';
+  systemMessage: string;
+  prompt: string;
+  maxTokens?: number;
+  temperature?: number;
+}
+
+export interface WorldBuildingResult {
+  content: string;
+  model: string;
+  usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  analysisType: string;
+  durationMs: number;
+}
+
+/**
+ * Dedicated world-building AI task.
+ * Handles element generation, expansion, codex generation, and consistency checks
+ * via Claude Code Max proxy. Separate from panel-analysis for independent scaling,
+ * monitoring, and retry configuration.
+ */
+export const prosecreatorWorldBuilding = task({
+  id: 'prosecreator-world-building',
+  retry: {
+    maxAttempts: 2,
+    minTimeoutInMs: 5000,
+    maxTimeoutInMs: 600000,
+    factor: 2,
+  },
+  run: async (payload: WorldBuildingPayload): Promise<WorldBuildingResult> => {
+    const startTime = Date.now();
+    const proxyUrl = process.env.CLAUDE_CODE_MAX_PROXY_URL || 'http://claude-code-proxy:3100';
+
+    console.log(
+      `[world-building] AI task: type=${payload.analysisType}, promptLen=${payload.prompt.length}`
+    );
+
+    const controller = new AbortController();
+    // Codex generation needs more time (up to 8 min), others 3 min
+    const fetchTimeoutMs = payload.analysisType === 'world_codex_generate' ? 480000 : 180000;
+    const timeout = setTimeout(() => controller.abort(), fetchTimeoutMs);
+
+    try {
+      const res = await fetch(`${proxyUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-opus-4-6',
+          messages: [
+            { role: 'system', content: payload.systemMessage },
+            { role: 'user', content: payload.prompt },
+          ],
+          max_tokens: payload.maxTokens || 8000,
+          temperature: payload.temperature || 0.3,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`Claude Code Max proxy error ${res.status}: ${errText.slice(0, 300)}`);
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const data = await res.json() as any;
+      const durationMs = Date.now() - startTime;
+
+      const extractedContent = data.choices?.[0]?.message?.content || '';
+      console.log(
+        `[world-building] Complete: type=${payload.analysisType}, duration=${durationMs}ms, model=${data.model || 'unknown'}, contentLen=${extractedContent.length}`
+      );
+
+      return {
+        content: extractedContent,
+        model: data.model || 'unknown',
+        usage: data.usage || {},
+        analysisType: payload.analysisType,
+        durationMs,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Full Ingestion Pipeline — 8 stages, each a standalone LLM call
 // ---------------------------------------------------------------------------
 
