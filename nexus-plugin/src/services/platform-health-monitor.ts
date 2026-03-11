@@ -622,28 +622,36 @@ export class PlatformHealthMonitor {
     // Check if Istio gateway pods are running
     try {
       const istioPods = await this.k8s.listPods('istio-system');
-      const gatewayPods = istioPods.filter((p) => p.name.includes('gateway'));
-      const runningGateways = gatewayPods.filter((p) => p.phase === 'Running');
 
-      checks.push({
-        component: 'istio:gateways',
-        category: 'istio',
-        status: runningGateways.length > 0 ? 'healthy' : 'unhealthy',
-        message: `${runningGateways.length}/${gatewayPods.length} gateway pods running`,
-        latencyMs: Date.now() - start,
-      });
+      // Empty array from K8s client means RBAC denied or API unreachable —
+      // don't report "0/0 unhealthy", mark as skipped instead
+      if (istioPods.length === 0) {
+        checks.push(this.skipped('istio:gateways', 'istio', 'Cannot enumerate istio-system pods (RBAC or empty)'));
+        checks.push(this.skipped('istio:istiod', 'istio', 'Cannot enumerate istio-system pods (RBAC or empty)'));
+      } else {
+        const gatewayPods = istioPods.filter((p) => p.name.includes('gateway'));
+        const runningGateways = gatewayPods.filter((p) => p.phase === 'Running');
 
-      // Check istiod (control plane)
-      const istiodPods = istioPods.filter((p) => p.name.includes('istiod'));
-      const runningIstiod = istiodPods.filter((p) => p.phase === 'Running');
+        checks.push({
+          component: 'istio:gateways',
+          category: 'istio',
+          status: runningGateways.length > 0 ? 'healthy' : 'unhealthy',
+          message: `${runningGateways.length}/${gatewayPods.length} gateway pods running`,
+          latencyMs: Date.now() - start,
+        });
 
-      checks.push({
-        component: 'istio:istiod',
-        category: 'istio',
-        status: runningIstiod.length > 0 ? 'healthy' : 'unhealthy',
-        message: `${runningIstiod.length}/${istiodPods.length} istiod pods running`,
-        latencyMs: Date.now() - start,
-      });
+        // Check istiod (control plane)
+        const istiodPods = istioPods.filter((p) => p.name.includes('istiod'));
+        const runningIstiod = istiodPods.filter((p) => p.phase === 'Running');
+
+        checks.push({
+          component: 'istio:istiod',
+          category: 'istio',
+          status: runningIstiod.length > 0 ? 'healthy' : 'unhealthy',
+          message: `${runningIstiod.length}/${istiodPods.length} istiod pods running`,
+          latencyMs: Date.now() - start,
+        });
+      }
     } catch {
       checks.push(this.skipped('istio:control-plane', 'istio', 'Cannot access istio-system namespace'));
     }
@@ -873,11 +881,20 @@ export class PlatformHealthMonitor {
   // -----------------------------------------------------------------------
 
   private async checkEmailService(): Promise<HealthCheck[]> {
-    // Check if deployment is scaled to 0 — if so, skip probing
+    // Check if deployment is scaled to 0 or doesn't exist — skip probing
     try {
       const deploys = await this.k8s.listDeployments(NAMESPACE);
       const emailDeploy = deploys.find((d) => d.name === 'nexus-email-connector');
-      if (emailDeploy && emailDeploy.desiredReplicas === 0) {
+      if (!emailDeploy) {
+        return [{
+          component: 'email:connector',
+          category: 'email',
+          status: 'skipped',
+          message: 'Deployment not found (not deployed)',
+          latencyMs: 0,
+        }];
+      }
+      if (emailDeploy.desiredReplicas === 0) {
         return [{
           component: 'email:connector',
           category: 'email',
