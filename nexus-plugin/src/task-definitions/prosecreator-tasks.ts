@@ -1336,7 +1336,7 @@ export const prosecreatorDocumentToResearch = task({
         signal: controller.signal,
       });
 
-      if (\!res.ok) {
+      if (!res.ok) {
         const errText = await res.text().catch(() => "");
         throw new Error(`Claude Code Max proxy error ${res.status}: ${errText.slice(0, 300)}`);
       }
