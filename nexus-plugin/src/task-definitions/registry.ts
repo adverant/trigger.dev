@@ -332,7 +332,7 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
     retryConfig: { maxAttempts: 1 },
   },
 
-  // ── ProseCreator (10) ───────────────────────────────────────────────
+  // ── ProseCreator (20) ───────────────────────────────────────────────
   {
     taskIdentifier: 'prosecreator-generate-blueprint',
     description: 'Generate a living blueprint from an outline using LLM analysis',
@@ -404,6 +404,55 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
     description: 'Import a completed novel — parse chapters, extract characters, identify plot threads via sequential LLM analysis',
     nexusService: 'prosecreator',
     retryConfig: { maxAttempts: 2, minTimeoutInMs: 10000, maxTimeoutInMs: 1800000, factor: 2 },
+  },
+  // Full Ingestion Pipeline (8 stages)
+  {
+    taskIdentifier: 'prosecreator-full-ingest-analyze',
+    description: 'Full ingest stage 1: Analyze imported document structure, genre, tone, and style',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 120000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-full-ingest-characters',
+    description: 'Full ingest stage 2: Extract character profiles, relationships, and voice fingerprints',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 300000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-full-ingest-structure',
+    description: 'Full ingest stage 3: Parse chapter/beat structure, POV tracking, and scene boundaries',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 480000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-full-ingest-world',
+    description: 'Full ingest stage 4: Extract world-building elements — locations, systems, rules',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-full-ingest-tropes',
+    description: 'Full ingest stage 5: Identify literary tropes, narrative patterns, and genre conventions',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 120000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-full-ingest-blueprint',
+    description: 'Full ingest stage 6: Generate a living blueprint from ingested content',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 300000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-full-ingest-constitution',
+    description: 'Full ingest stage 7: Generate project constitution — voice, rules, constraints',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 120000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-full-ingest-analysis',
+    description: 'Full ingest stage 8: Comprehensive quality analysis on fully ingested project',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
   },
 
   // ── Sandbox (4) ─────────────────────────────────────────────────────

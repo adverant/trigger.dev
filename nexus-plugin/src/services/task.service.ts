@@ -878,8 +878,8 @@ export class TaskService {
     const taskPayload = payload?.payload || payload;
 
     // Run async — don't block the HTTP response
-    if (taskId === 'prosecreator-panel-analysis' || taskId === 'prosecreator-novel-import') {
-      // Panel analysis and novel import use their own LLM calls with custom prompts.
+    if (taskId === 'prosecreator-panel-analysis' || taskId === 'prosecreator-novel-import' || taskId.startsWith('prosecreator-full-ingest-')) {
+      // Panel analysis, novel import, and full-ingest pipeline stages use their own LLM calls.
       // Route directly through Claude Max Proxy instead of the blueprint handler.
       this.handlePanelAnalysisTask(run.runId, triggerRunId, taskId, taskPayload, orgId)
         .catch((err) => {

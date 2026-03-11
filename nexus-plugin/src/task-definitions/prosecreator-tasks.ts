@@ -14,6 +14,16 @@
  * - prosecreatorDeepInsightGeneration: Semantic-level writing insights
  * - prosecreatorPanelAnalysis: Inspector panel LLM analysis via Claude Code Max proxy
  * - prosecreatorNovelImport: Import a completed novel — parse chapters, extract characters, identify plot threads
+ *
+ * Full Ingestion Pipeline tasks (8):
+ * - prosecreatorFullIngestAnalyze: Analyze imported document structure and content
+ * - prosecreatorFullIngestCharacters: Extract and create character profiles from imported text
+ * - prosecreatorFullIngestStructure: Parse and create chapter/beat structure from imported text
+ * - prosecreatorFullIngestWorld: Extract world-building elements (locations, systems, rules)
+ * - prosecreatorFullIngestTropes: Identify literary tropes and narrative patterns
+ * - prosecreatorFullIngestBlueprint: Generate a living blueprint from ingested content
+ * - prosecreatorFullIngestConstitution: Generate project constitution from ingested content
+ * - prosecreatorFullIngestAnalysis: Run comprehensive quality analysis on ingested project
  */
 
 import { task } from '@trigger.dev/sdk/v3';
@@ -960,5 +970,213 @@ export const prosecreatorNovelImport = task({
         processing_time_ms: processingTimeMs,
       },
     };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Full Ingestion Pipeline — 8 stages, each a standalone LLM call
+// ---------------------------------------------------------------------------
+
+export interface FullIngestPayload {
+  organizationId: string;
+  systemMessage: string;
+  prompt: string;
+  maxTokens?: number;
+  temperature?: number;
+}
+
+export interface FullIngestResult {
+  content: string;
+}
+
+/**
+ * Helper: execute a full-ingest pipeline stage via Claude Code Max proxy.
+ * All 8 stages share the same shape — receive a prompt, return content.
+ */
+async function executeFullIngestStage(
+  taskId: string,
+  payload: FullIngestPayload,
+  fetchTimeoutMs: number
+): Promise<FullIngestResult> {
+  const startTime = Date.now();
+  const proxyUrl = process.env.CLAUDE_CODE_MAX_PROXY_URL || 'http://claude-code-proxy:3100';
+  const model = process.env.CLAUDE_MODEL || 'claude-opus-4-6';
+
+  console.log(
+    `[${taskId}] Starting: promptLen=${payload.prompt.length}, maxTokens=${payload.maxTokens || 8000}, timeout=${fetchTimeoutMs}ms`
+  );
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), fetchTimeoutMs);
+
+  try {
+    const res = await fetch(`${proxyUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: payload.systemMessage },
+          { role: 'user', content: payload.prompt },
+        ],
+        max_tokens: payload.maxTokens || 8000,
+        temperature: payload.temperature || 0.3,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`Claude Code Max proxy error ${res.status}: ${errText.slice(0, 300)}`);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = await res.json() as any;
+    const durationMs = Date.now() - startTime;
+
+    const extractedContent = data.choices?.[0]?.message?.content || '';
+    console.log(
+      `[${taskId}] Complete: duration=${durationMs}ms, model=${data.model || 'unknown'}, contentLen=${extractedContent.length}`
+    );
+
+    return { content: extractedContent };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Stage 1: Analyze — initial document analysis (genre, tone, style, structure overview).
+ * Timeout: 2 min.
+ */
+export const prosecreatorFullIngestAnalyze = task({
+  id: 'prosecreator-full-ingest-analyze',
+  retry: {
+    maxAttempts: 2,
+    minTimeoutInMs: 3000,
+    maxTimeoutInMs: 120000,
+    factor: 2,
+  },
+  run: async (payload: FullIngestPayload): Promise<FullIngestResult> => {
+    return executeFullIngestStage('full-ingest-analyze', payload, 120000);
+  },
+});
+
+/**
+ * Stage 2: Characters — extract character profiles, relationships, voice fingerprints.
+ * Timeout: 5 min.
+ */
+export const prosecreatorFullIngestCharacters = task({
+  id: 'prosecreator-full-ingest-characters',
+  retry: {
+    maxAttempts: 2,
+    minTimeoutInMs: 5000,
+    maxTimeoutInMs: 300000,
+    factor: 2,
+  },
+  run: async (payload: FullIngestPayload): Promise<FullIngestResult> => {
+    return executeFullIngestStage('full-ingest-characters', payload, 300000);
+  },
+});
+
+/**
+ * Stage 3: Structure — parse chapter/beat structure, POV tracking, scene boundaries.
+ * Timeout: 8 min.
+ */
+export const prosecreatorFullIngestStructure = task({
+  id: 'prosecreator-full-ingest-structure',
+  retry: {
+    maxAttempts: 2,
+    minTimeoutInMs: 5000,
+    maxTimeoutInMs: 480000,
+    factor: 2,
+  },
+  run: async (payload: FullIngestPayload): Promise<FullIngestResult> => {
+    return executeFullIngestStage('full-ingest-structure', payload, 480000);
+  },
+});
+
+/**
+ * Stage 4: World — extract world-building elements (locations, magic systems, technology, rules).
+ * Timeout: 3 min.
+ */
+export const prosecreatorFullIngestWorld = task({
+  id: 'prosecreator-full-ingest-world',
+  retry: {
+    maxAttempts: 2,
+    minTimeoutInMs: 3000,
+    maxTimeoutInMs: 180000,
+    factor: 2,
+  },
+  run: async (payload: FullIngestPayload): Promise<FullIngestResult> => {
+    return executeFullIngestStage('full-ingest-world', payload, 180000);
+  },
+});
+
+/**
+ * Stage 5: Tropes — identify literary tropes, narrative patterns, genre conventions.
+ * Timeout: 2 min.
+ */
+export const prosecreatorFullIngestTropes = task({
+  id: 'prosecreator-full-ingest-tropes',
+  retry: {
+    maxAttempts: 2,
+    minTimeoutInMs: 3000,
+    maxTimeoutInMs: 120000,
+    factor: 2,
+  },
+  run: async (payload: FullIngestPayload): Promise<FullIngestResult> => {
+    return executeFullIngestStage('full-ingest-tropes', payload, 120000);
+  },
+});
+
+/**
+ * Stage 6: Blueprint — generate a living blueprint from the ingested content.
+ * Timeout: 5 min.
+ */
+export const prosecreatorFullIngestBlueprint = task({
+  id: 'prosecreator-full-ingest-blueprint',
+  retry: {
+    maxAttempts: 2,
+    minTimeoutInMs: 5000,
+    maxTimeoutInMs: 300000,
+    factor: 2,
+  },
+  run: async (payload: FullIngestPayload): Promise<FullIngestResult> => {
+    return executeFullIngestStage('full-ingest-blueprint', payload, 300000);
+  },
+});
+
+/**
+ * Stage 7: Constitution — generate project constitution (voice, rules, constraints).
+ * Timeout: 2 min.
+ */
+export const prosecreatorFullIngestConstitution = task({
+  id: 'prosecreator-full-ingest-constitution',
+  retry: {
+    maxAttempts: 2,
+    minTimeoutInMs: 3000,
+    maxTimeoutInMs: 120000,
+    factor: 2,
+  },
+  run: async (payload: FullIngestPayload): Promise<FullIngestResult> => {
+    return executeFullIngestStage('full-ingest-constitution', payload, 120000);
+  },
+});
+
+/**
+ * Stage 8: Analysis — comprehensive quality analysis on the fully ingested project.
+ * Timeout: 3 min.
+ */
+export const prosecreatorFullIngestAnalysis = task({
+  id: 'prosecreator-full-ingest-analysis',
+  retry: {
+    maxAttempts: 2,
+    minTimeoutInMs: 3000,
+    maxTimeoutInMs: 180000,
+    factor: 2,
+  },
+  run: async (payload: FullIngestPayload): Promise<FullIngestResult> => {
+    return executeFullIngestStage('full-ingest-analysis', payload, 180000);
   },
 });
