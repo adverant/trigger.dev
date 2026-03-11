@@ -1272,3 +1272,92 @@ export const prosecreatorFullIngestAnalysis = task({
     return executeFullIngestStage('full-ingest-analysis', payload, 180000);
   },
 });
+
+// ---------------------------------------------------------------------------
+// Document-to-Research Extraction Task
+// ---------------------------------------------------------------------------
+
+export interface DocumentToResearchPayload {
+  analysisType: string;
+  systemMessage: string;
+  prompt: string;
+  maxTokens?: number;
+  temperature?: number;
+}
+
+export interface DocumentToResearchResult {
+  content: string;
+  model: string;
+  usage: Record<string, number>;
+  analysisType: string;
+  durationMs: number;
+}
+
+/**
+ * Dedicated document-to-research extraction task.
+ * Analyzes document content via LLM and returns structured research topics.
+ * Supports N-parallel execution via batch trigger — each document gets its own task run.
+ * Uses Claude Code Max proxy for LLM inference.
+ */
+export const prosecreatorDocumentToResearch = task({
+  id: "prosecreator-document-to-research",
+  retry: {
+    maxAttempts: 2,
+    minTimeoutInMs: 5000,
+    maxTimeoutInMs: 600000,
+    factor: 2,
+  },
+  run: async (payload: DocumentToResearchPayload): Promise<DocumentToResearchResult> => {
+    const startTime = Date.now();
+    const proxyUrl = process.env.CLAUDE_CODE_MAX_PROXY_URL || "http://claude-code-proxy:3100";
+    const model = process.env.CLAUDE_MODEL || "claude-opus-4-6";
+
+    console.log(
+      `[document-to-research] AI task: type=${payload.analysisType}, promptLen=${payload.prompt.length}`
+    );
+
+    const controller = new AbortController();
+    const fetchTimeoutMs = 180000; // 3 minutes
+    const timeout = setTimeout(() => controller.abort(), fetchTimeoutMs);
+
+    try {
+      const res = await fetch(`${proxyUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: payload.systemMessage },
+            { role: "user", content: payload.prompt },
+          ],
+          max_tokens: payload.maxTokens || 8000,
+          temperature: payload.temperature || 0.3,
+        }),
+        signal: controller.signal,
+      });
+
+      if (\!res.ok) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(`Claude Code Max proxy error ${res.status}: ${errText.slice(0, 300)}`);
+      }
+
+      const data = await res.json() as any;
+      const durationMs = Date.now() - startTime;
+
+      const extractedContent = data.choices?.[0]?.message?.content || "";
+      console.log(
+        `[document-to-research] Complete: type=${payload.analysisType}, duration=${durationMs}ms, model=${data.model || "unknown"}, contentLen=${extractedContent.length}`
+      );
+
+      return {
+        content: extractedContent,
+        model: data.model || "unknown",
+        usage: data.usage || {},
+        analysisType: payload.analysisType,
+        durationMs,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  },
+});

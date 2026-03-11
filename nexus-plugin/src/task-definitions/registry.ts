@@ -461,6 +461,12 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
     nexusService: 'prosecreator',
     retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
   },
+  {
+    taskIdentifier: 'prosecreator-document-to-research',
+    description: 'Extract structured research topics from ingested documents via LLM analysis',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 600000, factor: 2 },
+  },
 
   // ── Sandbox (4) ─────────────────────────────────────────────────────
   {
