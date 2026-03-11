@@ -16,13 +16,17 @@ const logger = createLogger({ component: 'user-event-email' });
 const RESEND_API_URL = 'https://api.resend.com/emails';
 const NOTIFICATION_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL || process.env.HEALTH_NOTIFICATION_EMAIL || 'don@adverant.ai';
 
-// Events that should send an immediate email (not just digest)
+// ALL events send immediate emails — the admin wants visibility on everything
 const IMMEDIATE_EVENTS = new Set([
   'user.signup',
+  'user.login',
   'subscription.create',
   'subscription.upgrade',
   'subscription.downgrade',
   'subscription.cancel',
+  'apikey.create',
+  'apikey.revoke',
+  'apikey.rotate',
 ]);
 
 export interface WebhookEventPayload {
