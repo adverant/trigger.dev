@@ -1317,7 +1317,7 @@ export const prosecreatorDocumentToResearch = task({
     );
 
     const controller = new AbortController();
-    const fetchTimeoutMs = 180000; // 3 minutes
+    const fetchTimeoutMs = 540000; // 9 minutes
     const timeout = setTimeout(() => controller.abort(), fetchTimeoutMs);
 
     try {
