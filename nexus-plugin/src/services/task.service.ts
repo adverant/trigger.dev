@@ -878,8 +878,14 @@ export class TaskService {
     const taskPayload = payload?.payload || payload;
 
     // Run async — don't block the HTTP response
-    if (taskId === 'prosecreator-panel-analysis' || taskId === 'prosecreator-novel-import' || taskId.startsWith('prosecreator-full-ingest-')) {
-      // Panel analysis, novel import, and full-ingest pipeline stages use their own LLM calls.
+    if (taskId === 'prosecreator-document-ingest') {
+      // Document ingestion routes to FileProcess SmartRouter (not Claude proxy)
+      this.handleDocumentIngestTask(run.runId, triggerRunId, taskId, taskPayload, orgId)
+        .catch((err) => {
+          logger.error('Document ingest async handler error', { taskId, runId: run.runId, error: String(err) });
+        });
+    } else if (taskId === 'prosecreator-panel-analysis' || taskId === 'prosecreator-novel-import' || taskId === 'prosecreator-world-building' || taskId === 'prosecreator-document-to-research' || taskId.startsWith('prosecreator-full-ingest-')) {
+      // Panel analysis, novel import, world-building, document-to-research, and full-ingest pipeline stages use their own LLM calls.
       // Route directly through Claude Max Proxy instead of the blueprint handler.
       this.handlePanelAnalysisTask(run.runId, triggerRunId, taskId, taskPayload, orgId)
         .catch((err) => {
@@ -1069,6 +1075,205 @@ export class TaskService {
       });
 
       this.writeLog(orgId, runId, taskId, 'ERROR', `Panel analysis failed: ${errMsg}`);
+    }
+  }
+
+  /**
+   * Handle document ingestion tasks by calling FileProcess SmartRouter.
+   * This is NOT an LLM task \u2014 it calls FileProcess for OCR/extraction,
+   * which routes through MageAgent for real document processing.
+   *
+   * Payload shape:
+   *   { file_url: string, filename: string, document_id: string, project_id: string, user_id: string }
+   *
+   * For URL-based processing (Google Drive, HTTP):
+   *   Calls POST /api/process/url on nexus-fileprocess
+   *
+   * Returns extracted content, entities, and GraphRAG document ID in the run output.
+   */
+  private async handleDocumentIngestTask(
+    runId: string,
+    triggerRunId: string,
+    taskId: string,
+    payload: any,
+    orgId: string,
+  ): Promise<void> {
+    const startTime = Date.now();
+    const fileprocessUrl = process.env.FILEPROCESS_ENDPOINT
+      || 'http://nexus-fileprocess.nexus.svc.cluster.local:9109';
+
+    const fileUrl = payload.file_url || payload.fileUrl;
+    const filename = payload.filename || 'document';
+    const documentId = payload.document_id || payload.documentId;
+    const projectId = payload.project_id || payload.projectId;
+    const userId = payload.user_id || payload.userId;
+
+    logger.info('Document ingest task starting', {
+      taskId, runId, orgId,
+      documentId, filename,
+      hasUrl: !!fileUrl,
+    });
+
+    try {
+      if (!fileUrl) {
+        throw new Error('file_url is required for document ingestion');
+      }
+
+      // Step 1: Submit to FileProcess SmartRouter via URL endpoint
+      const submitRes = await fetch(`${fileprocessUrl}/api/process/url`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Company-ID': orgId || 'adverant',
+          'X-App-ID': 'prosecreator',
+          'X-User-ID': userId || 'system',
+        },
+        body: JSON.stringify({
+          fileUrl,
+          filename,
+          metadata: {
+            source: 'prosecreator-document-ingest',
+            documentId,
+            projectId,
+            userId,
+          },
+        }),
+      });
+
+      if (!submitRes.ok) {
+        const errText = await submitRes.text().catch(() => '');
+        throw new Error(`FileProcess submit error ${submitRes.status}: ${errText.slice(0, 500)}`);
+      }
+
+      const submitData: any = await submitRes.json();
+      const jobId = submitData.jobId || submitData.job_id || submitData.id;
+
+      if (!jobId) {
+        throw new Error(`FileProcess returned no jobId: ${JSON.stringify(submitData).slice(0, 500)}`);
+      }
+
+      logger.info('Document submitted to FileProcess', {
+        taskId, runId, jobId, documentId,
+      });
+
+      // Step 2: Poll FileProcess job until completion
+      const pollIntervalMs = 5000;
+      const maxPollTimeMs = 270000; // 4.5 minutes (leave buffer before 5min task timeout)
+      let elapsed = 0;
+
+      while (elapsed < maxPollTimeMs) {
+        await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+        elapsed += pollIntervalMs;
+
+        const statusRes = await fetch(`${fileprocessUrl}/api/jobs/${jobId}`, {
+          headers: {
+            'X-Company-ID': orgId || 'adverant',
+            'X-App-ID': 'prosecreator',
+            'X-User-ID': userId || 'system',
+          },
+        });
+
+        if (!statusRes.ok) {
+          logger.warn('FileProcess job poll failed', { jobId, status: statusRes.status });
+          continue;
+        }
+
+        const statusData: any = await statusRes.json();
+        const jobStatus = statusData.job?.status || statusData.status;
+
+        if (jobStatus === 'completed' || jobStatus === 'finished' || jobStatus === 'success') {
+          const job = statusData.job || statusData;
+          const extractedContent = job.extractedContent || job.content || job.text || '';
+          const entities = job.metadata?.entities || [];
+          const documentDnaId = job.documentDnaId || null;
+          const graphragDocId = job.graphragDocumentId || null;
+          const pageCount = job.metadata?.pageCount || 0;
+          const wordCount = job.metadata?.wordCount || 0;
+          const durationMs = Date.now() - startTime;
+
+          logger.info('Document ingest task completed', {
+            taskId, runId, orgId, documentId, jobId,
+            durationMs,
+            contentLen: extractedContent.length,
+            entityCount: entities.length,
+            pageCount, wordCount,
+          });
+
+          await this.runRepo.updateStatus(runId, 'COMPLETED', {
+            content: extractedContent,
+            document_id: documentId,
+            fileprocess_job_id: jobId,
+            document_dna_id: documentDnaId,
+            graphrag_document_id: graphragDocId,
+            entities,
+            page_count: pageCount,
+            word_count: wordCount,
+            durationMs,
+          });
+
+          emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+            taskId,
+            runId,
+            triggerRunId,
+            status: 'COMPLETED',
+          });
+
+          this.writeLog(orgId, runId, taskId, 'INFO', `Document ingest completed`, {
+            durationMs, documentId, jobId,
+            contentLen: extractedContent.length,
+            entityCount: entities.length,
+          });
+
+          return;
+        }
+
+        if (jobStatus === 'failed' || jobStatus === 'error') {
+          const errMsg = statusData.job?.errorMessage || statusData.errorMessage || 'FileProcess extraction failed';
+          throw new Error(errMsg);
+        }
+
+        // Still processing \u2014 continue polling
+        logger.debug('Document ingest polling', {
+          taskId, runId, jobId, jobStatus, elapsed,
+        });
+      }
+
+      // Timeout
+      throw new Error(`FileProcess job ${jobId} did not complete within ${maxPollTimeMs / 1000}s`);
+
+    } catch (err: any) {
+      const durationMs = Date.now() - startTime;
+      const errMsg = err.message || String(err);
+
+      const structured = classifyError(err, 'prosecreator');
+
+      await this.runRepo.updateStatus(runId, 'FAILED', undefined, errMsg);
+      await this.runRepo.mergeMetadata(runId, {
+        structuredError: structured,
+        document_id: documentId,
+        durationMs,
+      }).catch(() => {});
+
+      this.writeLog(orgId, runId, taskId, 'ERROR', `Document ingest failed: ${errMsg}`, {
+        errorCode: structured.code,
+        errorCategory: structured.category,
+        documentId,
+      });
+
+      emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+        taskId,
+        runId,
+        triggerRunId,
+        status: 'FAILED',
+        error: errMsg,
+        structuredError: structured,
+      });
+
+      logger.error('Document ingest task failed', {
+        taskId, runId, orgId, documentId,
+        error: errMsg,
+        durationMs,
+      });
     }
   }
 

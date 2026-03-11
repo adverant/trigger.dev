@@ -467,6 +467,13 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
     nexusService: 'prosecreator',
     retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 600000, factor: 2 },
   },
+  // Document Ingestion via FileProcess (batch parallel)
+  {
+    taskIdentifier: 'prosecreator-document-ingest',
+    description: 'Process documents through FileProcess SmartRouter for OCR, entity extraction, and GraphRAG storage \u2014 supports batch parallel execution',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 300000, factor: 2 },
+  },
 
   // ── Sandbox (4) ─────────────────────────────────────────────────────
   {
