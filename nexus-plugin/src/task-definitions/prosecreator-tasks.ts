@@ -1304,7 +1304,7 @@ export const prosecreatorDocumentToResearch = task({
   retry: {
     maxAttempts: 2,
     minTimeoutInMs: 5000,
-    maxTimeoutInMs: 600000,
+    maxTimeoutInMs: 1200000,
     factor: 2,
   },
   run: async (payload: DocumentToResearchPayload): Promise<DocumentToResearchResult> => {
@@ -1317,7 +1317,7 @@ export const prosecreatorDocumentToResearch = task({
     );
 
     const controller = new AbortController();
-    const fetchTimeoutMs = 540000; // 9 minutes
+    const fetchTimeoutMs = 900000; // 15 minutes
     const timeout = setTimeout(() => controller.abort(), fetchTimeoutMs);
 
     try {
