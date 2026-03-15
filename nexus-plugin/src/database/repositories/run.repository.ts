@@ -349,6 +349,14 @@ export class RunRepository {
     }));
   }
 
+  async getTaskCount(orgId: string): Promise<number> {
+    const row = await this.db.queryOne<any>(
+      `SELECT COUNT(*) AS count FROM trigger.task_definitions WHERE organization_id = $1`,
+      [orgId]
+    );
+    return parseInt(row?.count || '0', 10);
+  }
+
   async getTaskHealth(orgId: string): Promise<Array<{ taskIdentifier: string; total: number; completed: number; failed: number; avgDurationMs: number | null }>> {
     const rows = await this.db.queryMany<any>(
       `SELECT

@@ -96,6 +96,14 @@ export class WaitpointRepository {
     return row ? this.mapRow(row) : null;
   }
 
+  async countPending(orgId: string): Promise<number> {
+    const row = await this.db.queryOne<any>(
+      `SELECT COUNT(*) AS count FROM trigger.waitpoints WHERE organization_id = $1 AND status = 'pending'`,
+      [orgId]
+    );
+    return parseInt(row?.count || '0', 10);
+  }
+
   async findPending(orgId: string): Promise<Waitpoint[]> {
     const rows = await this.db.queryMany<any>(
       `SELECT * FROM trigger.waitpoints

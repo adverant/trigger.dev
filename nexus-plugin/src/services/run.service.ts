@@ -1,6 +1,8 @@
 import { Server as SocketIOServer } from 'socket.io';
 import { TriggerProxyService } from './trigger-proxy.service';
 import { RunRepository, Run, RunFilters, RunStatus } from '../database/repositories/run.repository';
+import { ScheduleRepository } from '../database/repositories/schedule.repository';
+import { WaitpointRepository } from '../database/repositories/waitpoint.repository';
 import { createLogger } from '../utils/logger';
 import { NotFoundError } from '../utils/errors';
 import { WS_EVENTS } from '../websocket/events';
@@ -12,7 +14,9 @@ export class RunService {
   constructor(
     private proxy: TriggerProxyService,
     private runRepo: RunRepository,
-    private io: SocketIOServer
+    private io: SocketIOServer,
+    private scheduleRepo?: ScheduleRepository,
+    private waitpointRepo?: WaitpointRepository
   ) {}
 
   async listRuns(
@@ -165,20 +169,23 @@ export class RunService {
   }
 
   async getStatistics(orgId: string): Promise<any> {
-    const [raw, runsByHour, taskHealth] = await Promise.all([
+    const [raw, runsByHour, taskHealth, taskCount, enabledSchedules, pendingWaitpoints] = await Promise.all([
       this.runRepo.getStatistics(orgId),
       this.runRepo.getRunsByHour(orgId),
       this.runRepo.getTaskHealth(orgId),
+      this.runRepo.getTaskCount(orgId),
+      this.scheduleRepo ? this.scheduleRepo.countEnabled(orgId) : Promise.resolve(0),
+      this.waitpointRepo ? this.waitpointRepo.countPending(orgId) : Promise.resolve(0),
     ]);
 
     // Count currently active (non-terminal) runs
     const activeRuns = raw.totalRuns - raw.completedRuns - raw.failedRuns;
 
     return {
-      totalTasks: raw.totalRuns,
+      totalTasks: taskCount,
       activeRuns: activeRuns > 0 ? activeRuns : 0,
-      scheduledJobs: 0,
-      pendingWaitpoints: 0,
+      scheduledJobs: enabledSchedules,
+      pendingWaitpoints,
       failedLast24h: raw.failedRuns,
       runsByHour,
       taskHealth,

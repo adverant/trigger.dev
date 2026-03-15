@@ -240,6 +240,14 @@ export class ScheduleRepository {
     }
   }
 
+  async countEnabled(orgId: string): Promise<number> {
+    const row = await this.db.queryOne<any>(
+      `SELECT COUNT(*) AS count FROM trigger.schedule_configs WHERE organization_id = $1 AND enabled = TRUE`,
+      [orgId]
+    );
+    return parseInt(row?.count || '0', 10);
+  }
+
   async findEnabled(): Promise<Schedule[]> {
     const rows = await this.db.queryMany<any>(
       `SELECT * FROM trigger.schedule_configs WHERE enabled = TRUE ORDER BY next_run_at ASC NULLS LAST`

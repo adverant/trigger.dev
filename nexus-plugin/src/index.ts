@@ -206,7 +206,7 @@ class NexusTriggerServer {
         this.db.getPool(),
         this.redis,
       );
-      const runService = new RunService(triggerProxy, runRepo, this.io);
+      const runService = new RunService(triggerProxy, runRepo, this.io, scheduleRepo, waitpointRepo);
       const scheduleService = new ScheduleService(scheduleRepo, usageRepo, this.io);
 
       // Create in-process schedule executor (local cron engine — no Trigger.dev cloud needed)
