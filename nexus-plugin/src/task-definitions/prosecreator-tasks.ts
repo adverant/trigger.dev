@@ -1361,3 +1361,757 @@ export const prosecreatorDocumentToResearch = task({
     }
   },
 });
+
+// ---------------------------------------------------------------------------
+// Shared LLM Task Helper — Tier 1 (LLM-only) tasks
+// ---------------------------------------------------------------------------
+
+/**
+ * Payload for all Tier 1 LLM-only tasks.
+ * Same shape as PanelAnalysisPayload — systemMessage + prompt + config.
+ */
+export interface LLMTaskPayload {
+  organizationId: string;
+  analysisType: string;
+  systemMessage: string;
+  prompt: string;
+  maxTokens?: number;
+  temperature?: number;
+}
+
+export interface LLMTaskResult {
+  content: string;
+  model: string;
+  usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  analysisType: string;
+  durationMs: number;
+}
+
+/**
+ * Execute an LLM-only task via Claude Code Max proxy.
+ * Shared by all Tier 1 tasks — receives a fully-built prompt, calls the proxy,
+ * and returns the raw LLM content. Post-processing (DB writes, etc.) happens
+ * on the ProseCreator side after polling the run result.
+ *
+ * @param taskLabel - Human-readable label for logging (e.g. 'research-generate')
+ * @param payload - System message, prompt, and generation config
+ * @param fetchTimeoutMs - Abort timeout for the LLM fetch call
+ */
+async function executeLLMTask(
+  taskLabel: string,
+  payload: LLMTaskPayload,
+  fetchTimeoutMs?: number,
+): Promise<LLMTaskResult> {
+  const startTime = Date.now();
+  const proxyUrl = process.env.CLAUDE_CODE_MAX_PROXY_URL || 'http://claude-code-proxy:3100';
+  const model = process.env.CLAUDE_MODEL || 'claude-opus-4-6';
+  const maxTokens = payload.maxTokens || 8000;
+  const temperature = payload.temperature ?? 0.3;
+
+  // Scale timeout with maxTokens if not explicitly provided
+  const effectiveTimeout = fetchTimeoutMs ?? (maxTokens > 16000 ? 480000 : 150000);
+
+  console.log(
+    `[${taskLabel}] Starting: type=${payload.analysisType}, promptLen=${payload.prompt.length}, maxTokens=${maxTokens}, timeout=${effectiveTimeout}ms`
+  );
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), effectiveTimeout);
+
+  try {
+    const res = await fetch(`${proxyUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: payload.systemMessage },
+          { role: 'user', content: payload.prompt },
+        ],
+        max_tokens: maxTokens,
+        temperature,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`Claude Code Max proxy error ${res.status}: ${errText.slice(0, 300)}`);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = await res.json() as any;
+    const durationMs = Date.now() - startTime;
+
+    const extractedContent = data.choices?.[0]?.message?.content || '';
+    console.log(
+      `[${taskLabel}] Complete: type=${payload.analysisType}, duration=${durationMs}ms, model=${data.model || 'unknown'}, contentLen=${extractedContent.length}`
+    );
+
+    return {
+      content: extractedContent,
+      model: data.model || 'unknown',
+      usage: data.usage || {},
+      analysisType: payload.analysisType,
+      durationMs,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tier 1 Tasks — LLM-only (research, publication, constitution, etc.)
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate a research brief from project context + topic.
+ * LLM produces structured research output stored back in prose.research_briefs.
+ */
+export const prosecreatorResearchGenerate = task({
+  id: 'prosecreator-research-generate',
+  retry: { maxAttempts: 3, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: LLMTaskPayload): Promise<LLMTaskResult> => {
+    return executeLLMTask('research-generate', payload, 180000);
+  },
+});
+
+/**
+ * Refine an existing research brief with additional context or focus areas.
+ */
+export const prosecreatorResearchRefine = task({
+  id: 'prosecreator-research-refine',
+  retry: { maxAttempts: 3, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: LLMTaskPayload): Promise<LLMTaskResult> => {
+    return executeLLMTask('research-refine', payload, 180000);
+  },
+});
+
+/**
+ * Validate factual claims in manuscript content against research briefs.
+ */
+export const prosecreatorClaimValidation = task({
+  id: 'prosecreator-claim-validation',
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
+  run: async (payload: LLMTaskPayload): Promise<LLMTaskResult> => {
+    return executeLLMTask('claim-validation', payload, 150000);
+  },
+});
+
+/**
+ * Generate a book index from manuscript content — topics, names, locations.
+ */
+export const prosecreatorIndexGeneration = task({
+  id: 'prosecreator-index-generation',
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: LLMTaskPayload): Promise<LLMTaskResult> => {
+    return executeLLMTask('index-generation', payload, 180000);
+  },
+});
+
+/**
+ * Generate copyright page content for publication.
+ */
+export const prosecreatorPublicationCopyright = task({
+  id: 'prosecreator-publication-copyright',
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 120000, factor: 2 },
+  run: async (payload: LLMTaskPayload): Promise<LLMTaskResult> => {
+    return executeLLMTask('publication-copyright', payload, 90000);
+  },
+});
+
+/**
+ * Generate "About the Author" section for publication.
+ */
+export const prosecreatorPublicationAbout = task({
+  id: 'prosecreator-publication-about',
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 120000, factor: 2 },
+  run: async (payload: LLMTaskPayload): Promise<LLMTaskResult> => {
+    return executeLLMTask('publication-about', payload, 90000);
+  },
+});
+
+/**
+ * Generate a marketing blurb / back-cover copy for publication.
+ */
+export const prosecreatorPublicationBlurb = task({
+  id: 'prosecreator-publication-blurb',
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 120000, factor: 2 },
+  run: async (payload: LLMTaskPayload): Promise<LLMTaskResult> => {
+    return executeLLMTask('publication-blurb', payload, 90000);
+  },
+});
+
+/**
+ * Generate front/back matter sections (dedication, acknowledgements, etc.).
+ */
+export const prosecreatorPublicationMatter = task({
+  id: 'prosecreator-publication-matter',
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 120000, factor: 2 },
+  run: async (payload: LLMTaskPayload): Promise<LLMTaskResult> => {
+    return executeLLMTask('publication-matter', payload, 90000);
+  },
+});
+
+/**
+ * Assess publication readiness — completeness, quality gates, formatting checks.
+ */
+export const prosecreatorPublicationReadiness = task({
+  id: 'prosecreator-publication-readiness',
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
+  run: async (payload: LLMTaskPayload): Promise<LLMTaskResult> => {
+    return executeLLMTask('publication-readiness', payload, 120000);
+  },
+});
+
+/**
+ * Generate a full project constitution — voice, rules, constraints, style guide.
+ */
+export const prosecreatorConstitutionGenerate = task({
+  id: 'prosecreator-constitution-generate',
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: LLMTaskPayload): Promise<LLMTaskResult> => {
+    return executeLLMTask('constitution-generate', payload, 180000);
+  },
+});
+
+/**
+ * Generate or update a single section of the project constitution.
+ */
+export const prosecreatorConstitutionSection = task({
+  id: 'prosecreator-constitution-section',
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
+  run: async (payload: LLMTaskPayload): Promise<LLMTaskResult> => {
+    return executeLLMTask('constitution-section', payload, 120000);
+  },
+});
+
+/**
+ * Analyze character evolution across chapters — trait changes, arc progression,
+ * relationship dynamics. Feeds CharacterEvolutionService.
+ */
+export const prosecreatorCharacterEvolution = task({
+  id: 'prosecreator-character-evolution',
+  retry: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 600000, factor: 2 },
+  run: async (payload: LLMTaskPayload): Promise<LLMTaskResult> => {
+    return executeLLMTask('character-evolution', payload, 300000);
+  },
+});
+
+/**
+ * Generate a TTS voice profile for a character — prosody, pace, pitch, emotion mapping.
+ */
+export const prosecreatorTTSVoiceProfile = task({
+  id: 'prosecreator-tts-voice-profile',
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
+  run: async (payload: LLMTaskPayload): Promise<LLMTaskResult> => {
+    return executeLLMTask('tts-voice-profile', payload, 120000);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Shared Callback Task Helper — Tier 2 (callback to ProseCreator)
+// ---------------------------------------------------------------------------
+
+/**
+ * Payload for Tier 2 callback tasks.
+ * The task calls back to ProseCreator's internal execute endpoint, which
+ * runs the full handler with ServiceContainer access.
+ */
+export interface CallbackTaskPayload {
+  organizationId: string;
+  inputParams: Record<string, unknown>;
+  jobId?: string;
+  userId?: string;
+  projectId?: string;
+}
+
+export interface CallbackTaskResult {
+  executionId: string;
+  status: 'completed' | 'failed';
+  result?: unknown;
+  durationMs: number;
+}
+
+/**
+ * Execute a Tier 2 task by calling back to ProseCreator's internal execute endpoint.
+ *
+ * Flow:
+ *   1. POST to /prosecreator/api/internal/execute with job_type + input_params
+ *   2. Poll /prosecreator/api/internal/execute/:executionId/status until completion
+ *   3. Return result or throw on failure/timeout
+ *
+ * @param taskLabel - Human-readable label for logging
+ * @param jobType - The ProseCreator job_type string (e.g. 'beat', 'chapter', 'canvas_brainstorm')
+ * @param payload - Organization, input params, optional job ID
+ * @param options - Timeout and poll interval overrides
+ */
+async function executeCallbackTask(
+  taskLabel: string,
+  jobType: string,
+  payload: CallbackTaskPayload,
+  options?: { timeoutMs?: number; pollIntervalMs?: number },
+): Promise<CallbackTaskResult> {
+  const startTime = Date.now();
+  const prosecreatorUrl = process.env.PROSECREATOR_ENDPOINT || 'http://nexus-prosecreator:3000';
+  const serviceKey = process.env.NEXUS_TRIGGER_SERVICE_KEY || process.env.INTERNAL_SERVICE_KEY || '';
+  const timeoutMs = options?.timeoutMs || 600000;
+  const pollIntervalMs = options?.pollIntervalMs || 5000;
+
+  console.log(
+    `[${taskLabel}] Starting callback: jobType=${jobType}, org=${payload.organizationId}, timeout=${timeoutMs}ms`
+  );
+
+  // Step 1: Submit execution request
+  const submitRes = await fetch(`${prosecreatorUrl}/prosecreator/api/internal/execute`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-service-key': serviceKey,
+    },
+    body: JSON.stringify({
+      job_type: jobType,
+      input_params: payload.inputParams,
+      run_id: `trigger-${taskLabel}-${Date.now()}`,
+      user_id: payload.userId,
+      project_id: payload.projectId,
+    }),
+  });
+
+  if (!submitRes.ok) {
+    const errText = await submitRes.text().catch(() => '');
+    throw new Error(`ProseCreator execute failed (${submitRes.status}): ${errText.slice(0, 500)}`);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const submitData = await submitRes.json() as any;
+  const executionId = submitData.execution_id || submitData.executionId || submitData.id;
+
+  if (!executionId) {
+    throw new Error(`ProseCreator returned no execution_id: ${JSON.stringify(submitData).slice(0, 500)}`);
+  }
+
+  console.log(
+    `[${taskLabel}] Execution accepted: executionId=${executionId}`
+  );
+
+  // Step 2: Poll for completion
+  const pollStart = Date.now();
+  while (Date.now() - pollStart < timeoutMs) {
+    await new Promise(r => setTimeout(r, pollIntervalMs));
+
+    try {
+      const statusRes = await fetch(
+        `${prosecreatorUrl}/prosecreator/api/internal/execute/${executionId}/status`,
+        {
+          headers: {
+            'x-service-key': serviceKey,
+          },
+        }
+      );
+
+      if (!statusRes.ok) {
+        console.warn(`[${taskLabel}] Status poll returned ${statusRes.status}, retrying...`);
+        continue;
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const statusData = await statusRes.json() as any;
+      const jobStatus = statusData.status;
+
+      if (jobStatus === 'completed') {
+        const durationMs = Date.now() - startTime;
+        console.log(
+          `[${taskLabel}] Completed: executionId=${executionId}, duration=${durationMs}ms`
+        );
+        return {
+          executionId,
+          status: 'completed',
+          result: statusData.result || statusData.output,
+          durationMs,
+        };
+      }
+
+      if (jobStatus === 'failed' || jobStatus === 'error') {
+        const errMsg = statusData.error || statusData.message || 'Job failed on ProseCreator';
+        throw new Error(`${taskLabel} failed: ${errMsg}`);
+      }
+
+      // Still processing — log progress if available
+      if (statusData.progress) {
+        console.log(
+          `[${taskLabel}] Progress: ${statusData.progress}% (${Math.round((Date.now() - pollStart) / 1000)}s elapsed)`
+        );
+      }
+    } catch (err) {
+      // Re-throw if this is our own error (not a poll failure)
+      if (err instanceof Error && err.message.startsWith(`${taskLabel} failed:`)) {
+        throw err;
+      }
+      console.warn(`[${taskLabel}] Poll error, retrying: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  throw new Error(`${taskLabel} timed out after ${timeoutMs}ms (executionId=${executionId})`);
+}
+
+// ---------------------------------------------------------------------------
+// Tier 2 Tasks — Callback to ProseCreator (full ServiceContainer access)
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate a single beat (scene) within a chapter.
+ * Uses ProseGenerator + ContextInjector + AntiAIDetection + VoiceConsistency pipeline.
+ * Queue: prosecreator-generation. Timeout: 10 min.
+ */
+export const prosecreatorBeatGeneration = task({
+  id: 'prosecreator-beat-generation',
+  queue: { name: 'prosecreator-generation' },
+  retry: { maxAttempts: 3, minTimeoutInMs: 5000, maxTimeoutInMs: 600000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('beat-generation', 'beat', payload, { timeoutMs: 600000 });
+  },
+});
+
+/**
+ * Generate a full chapter — orchestrates multiple beat generations, word count rollup,
+ * plot thread seeding. Queue: prosecreator-generation. Timeout: 25 min.
+ */
+export const prosecreatorChapterGeneration = task({
+  id: 'prosecreator-chapter-generation',
+  queue: { name: 'prosecreator-generation' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 10000, maxTimeoutInMs: 1500000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('chapter-generation', 'chapter', payload, { timeoutMs: 1500000 });
+  },
+});
+
+/**
+ * Generate a living blueprint from project outline/data.
+ * Uses BlueprintManager + entity extraction + JSON repair.
+ * Queue: prosecreator-generation. Timeout: 15 min.
+ */
+export const prosecreatorBlueprintGeneration = task({
+  id: 'prosecreator-blueprint-generation',
+  queue: { name: 'prosecreator-generation' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('blueprint-generation', 'blueprint', payload, { timeoutMs: 900000 });
+  },
+});
+
+/**
+ * Run analysis on manuscript content — supports 6 subtypes (continuity, style, pacing,
+ * character, plot holes, AI detection). Queue: prosecreator-analysis. Timeout: 5 min.
+ */
+export const prosecreatorAnalysis = task({
+  id: 'prosecreator-analysis',
+  queue: { name: 'prosecreator-analysis' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('analysis', 'analysis', payload, { timeoutMs: 300000 });
+  },
+});
+
+/**
+ * Run a critique session with persona-based feedback on manuscript content.
+ * Queue: prosecreator-analysis. Timeout: 5 min.
+ */
+export const prosecreatorCritique = task({
+  id: 'prosecreator-critique',
+  queue: { name: 'prosecreator-analysis' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('critique', 'critique', payload, { timeoutMs: 300000 });
+  },
+});
+
+/**
+ * Invoke a Writers Room persona to generate in-character feedback or dialogue.
+ * Queue: prosecreator-analysis. Timeout: 5 min.
+ */
+export const prosecreatorRoomPersona = task({
+  id: 'prosecreator-room-persona',
+  queue: { name: 'prosecreator-analysis' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('room-persona', 'room_persona', payload, { timeoutMs: 300000 });
+  },
+});
+
+/**
+ * Generate a full character bible — comprehensive character profile, voice fingerprint,
+ * relationship map, arc outline. Uses CharacterBibleManager.
+ * Queue: prosecreator-analysis. Timeout: 30 min.
+ */
+export const prosecreatorCharacterBible = task({
+  id: 'prosecreator-character-bible',
+  queue: { name: 'prosecreator-analysis' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 10000, maxTimeoutInMs: 1800000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('character-bible', 'character_bible', payload, { timeoutMs: 1800000 });
+  },
+});
+
+/**
+ * Generate a single section of a character bible (e.g. backstory, voice, motivations).
+ * Queue: prosecreator-analysis. Timeout: 25 min.
+ */
+export const prosecreatorCharacterBibleSection = task({
+  id: 'prosecreator-character-bible-section',
+  queue: { name: 'prosecreator-analysis' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 1500000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('character-bible-section', 'character_bible_section', payload, { timeoutMs: 1500000 });
+  },
+});
+
+// ── Canvas tasks (9 types) ─────────────────────────────────────────────────
+
+/**
+ * Canvas brainstorm — generate ideas for a story element.
+ * Queue: prosecreator-canvas. Timeout: 5 min.
+ */
+export const prosecreatorCanvasBrainstorm = task({
+  id: 'prosecreator-canvas-brainstorm',
+  queue: { name: 'prosecreator-canvas' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('canvas-brainstorm', 'canvas_brainstorm', payload, { timeoutMs: 300000 });
+  },
+});
+
+/**
+ * Canvas expand — elaborate on a story element node.
+ */
+export const prosecreatorCanvasExpand = task({
+  id: 'prosecreator-canvas-expand',
+  queue: { name: 'prosecreator-canvas' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('canvas-expand', 'canvas_expand', payload, { timeoutMs: 300000 });
+  },
+});
+
+/**
+ * Canvas connect — find relationships between story elements.
+ */
+export const prosecreatorCanvasConnect = task({
+  id: 'prosecreator-canvas-connect',
+  queue: { name: 'prosecreator-canvas' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('canvas-connect', 'canvas_connect', payload, { timeoutMs: 300000 });
+  },
+});
+
+/**
+ * Canvas challenge — generate "what if" scenarios and contradictions.
+ */
+export const prosecreatorCanvasChallenge = task({
+  id: 'prosecreator-canvas-challenge',
+  queue: { name: 'prosecreator-canvas' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('canvas-challenge', 'canvas_challenge', payload, { timeoutMs: 300000 });
+  },
+});
+
+/**
+ * Canvas synthesize — merge multiple nodes into a coherent summary.
+ */
+export const prosecreatorCanvasSynthesize = task({
+  id: 'prosecreator-canvas-synthesize',
+  queue: { name: 'prosecreator-canvas' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('canvas-synthesize', 'canvas_synthesize', payload, { timeoutMs: 300000 });
+  },
+});
+
+/**
+ * Canvas research — generate research notes for a story element.
+ */
+export const prosecreatorCanvasResearch = task({
+  id: 'prosecreator-canvas-research',
+  queue: { name: 'prosecreator-canvas' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('canvas-research', 'canvas_research', payload, { timeoutMs: 300000 });
+  },
+});
+
+/**
+ * Canvas outline — generate a structured outline from canvas elements.
+ */
+export const prosecreatorCanvasOutline = task({
+  id: 'prosecreator-canvas-outline',
+  queue: { name: 'prosecreator-canvas' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('canvas-outline', 'canvas_outline', payload, { timeoutMs: 300000 });
+  },
+});
+
+/**
+ * Canvas critique — provide feedback on a canvas node's narrative quality.
+ */
+export const prosecreatorCanvasCritique = task({
+  id: 'prosecreator-canvas-critique',
+  queue: { name: 'prosecreator-canvas' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('canvas-critique', 'canvas_critique', payload, { timeoutMs: 300000 });
+  },
+});
+
+/**
+ * Canvas transform — convert a story element from one form to another.
+ */
+export const prosecreatorCanvasTransform = task({
+  id: 'prosecreator-canvas-transform',
+  queue: { name: 'prosecreator-canvas' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('canvas-transform', 'canvas_transform', payload, { timeoutMs: 300000 });
+  },
+});
+
+// ── Audiobook tasks (4 types) ──────────────────────────────────────────────
+
+/**
+ * Generate full audiobook — TTS for all chapters, assembly, metadata.
+ * Queue: prosecreator-audiobook. Timeout: 30 min.
+ */
+export const prosecreatorAudiobookFull = task({
+  id: 'prosecreator-audiobook-full',
+  queue: { name: 'prosecreator-audiobook' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 10000, maxTimeoutInMs: 1800000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('audiobook-full', 'audiobook_full', payload, { timeoutMs: 1800000, pollIntervalMs: 10000 });
+  },
+});
+
+/**
+ * Generate TTS audio for a single chapter.
+ * Queue: prosecreator-audiobook. Timeout: 25 min.
+ */
+export const prosecreatorAudiobookChapter = task({
+  id: 'prosecreator-audiobook-chapter',
+  queue: { name: 'prosecreator-audiobook' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 1500000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('audiobook-chapter', 'audiobook_chapter', payload, { timeoutMs: 1500000, pollIntervalMs: 10000 });
+  },
+});
+
+/**
+ * Assemble individual chapter audio files into a complete audiobook.
+ * Queue: prosecreator-audiobook. Timeout: 15 min.
+ */
+export const prosecreatorAudiobookAssemble = task({
+  id: 'prosecreator-audiobook-assemble',
+  queue: { name: 'prosecreator-audiobook' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('audiobook-assemble', 'audiobook_assemble', payload, { timeoutMs: 900000 });
+  },
+});
+
+/**
+ * Export assembled audiobook to final format (M4B, MP3 chapters, etc.).
+ * Queue: prosecreator-audiobook. Timeout: 15 min.
+ */
+export const prosecreatorAudiobookExport = task({
+  id: 'prosecreator-audiobook-export',
+  queue: { name: 'prosecreator-audiobook' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('audiobook-export', 'audiobook_export', payload, { timeoutMs: 900000 });
+  },
+});
+
+// ── Forge tasks (5 phases) ─────────────────────────────────────────────────
+
+/**
+ * Forge phase: outline generation from user brief.
+ * Queue: prosecreator-generation. Timeout: 15 min.
+ */
+export const prosecreatorForgeOutline = task({
+  id: 'prosecreator-forge-outline',
+  queue: { name: 'prosecreator-generation' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('forge-outline', 'forge_outline', payload, { timeoutMs: 900000 });
+  },
+});
+
+/**
+ * Forge phase: draft generation from approved outline.
+ * Queue: prosecreator-generation. Timeout: 15 min.
+ */
+export const prosecreatorForgeDraft = task({
+  id: 'prosecreator-forge-draft',
+  queue: { name: 'prosecreator-generation' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('forge-draft', 'forge_draft', payload, { timeoutMs: 900000 });
+  },
+});
+
+/**
+ * Forge phase: revision pass on draft.
+ * Queue: prosecreator-generation. Timeout: 15 min.
+ */
+export const prosecreatorForgeRevise = task({
+  id: 'prosecreator-forge-revise',
+  queue: { name: 'prosecreator-generation' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('forge-revise', 'forge_revise', payload, { timeoutMs: 900000 });
+  },
+});
+
+/**
+ * Forge phase: polish pass — final grammar, style, voice refinement.
+ * Queue: prosecreator-generation. Timeout: 15 min.
+ */
+export const prosecreatorForgePolish = task({
+  id: 'prosecreator-forge-polish',
+  queue: { name: 'prosecreator-generation' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('forge-polish', 'forge_polish', payload, { timeoutMs: 900000 });
+  },
+});
+
+/**
+ * Forge phase: final quality check and formatting.
+ * Queue: prosecreator-generation. Timeout: 15 min.
+ */
+export const prosecreatorForgeFinalize = task({
+  id: 'prosecreator-forge-finalize',
+  queue: { name: 'prosecreator-generation' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('forge-finalize', 'forge_finalize', payload, { timeoutMs: 900000 });
+  },
+});
+
+// ── GitHub Scaffold (Tier 2 callback) ──────────────────────────────────────
+
+/**
+ * Generate complete series folder structure in a GitHub repo via callback.
+ * Loads all series data, generates AI READMEs, writes files, git push.
+ * This is the Tier 2 callback version — the existing prosecreator-github-scaffold
+ * task (Tier 3, already migrated) handles the LLM README generation directly.
+ * Queue: prosecreator-generation. Timeout: 15 min.
+ */
+export const prosecreatorGitHubScaffoldCallback = task({
+  id: 'prosecreator-github-scaffold-callback',
+  queue: { name: 'prosecreator-generation' },
+  retry: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+  run: async (payload: CallbackTaskPayload): Promise<CallbackTaskResult> => {
+    return executeCallbackTask('github-scaffold', 'github_repo_scaffold', payload, { timeoutMs: 900000 });
+  },
+});

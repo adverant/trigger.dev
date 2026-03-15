@@ -624,6 +624,113 @@ class NexusTriggerServer {
       }
     });
 
+    // Internal batch trigger endpoint (service-key auth, no JWT required)
+    // Used by nexus-prosecreator for parallel LLM calls in Full Extract Pipeline
+    this.app.post('/trigger/internal/batches/trigger', async (req, res) => {
+      const serviceKey = req.headers['x-service-key'] as string;
+      const expectedBatchKey = process.env.INTERNAL_SERVICE_KEY;
+
+      if (!expectedBatchKey || serviceKey !== expectedBatchKey) {
+        return res.status(401).json({ error: 'Invalid service key' });
+      }
+
+      const { items, name } = req.body;
+      if (!items || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: 'items[] is required and must not be empty' });
+      }
+      if (items.length > 500) {
+        return res.status(400).json({ error: 'Maximum 500 items per batch' });
+      }
+
+      try {
+        const projects = await this.db.getPool().query(
+          'SELECT project_id, organization_id FROM trigger.projects LIMIT 1'
+        );
+        if (projects.rows.length === 0) {
+          return res.status(500).json({ error: 'No projects configured' });
+        }
+        const { project_id, organization_id } = projects.rows[0];
+
+        const batch = await batchRepo.create(organization_id, name);
+        const results: { taskIdentifier: string; runId?: string; error?: string }[] = [];
+
+        for (const item of items) {
+          try {
+            const run = await taskService.triggerTask(
+              organization_id, 'system', project_id, item.taskIdentifier, item.payload || {}
+            );
+            if (run?.runId) {
+              await batchRepo.linkRun(run.runId, batch.batchId);
+            }
+            results.push({ taskIdentifier: item.taskIdentifier, runId: run?.localRunId || run?.runId });
+          } catch (err: any) {
+            results.push({ taskIdentifier: item.taskIdentifier, error: err.message });
+          }
+        }
+
+        const updated = await batchRepo.updateCounts(batch.batchId);
+
+        logger.info('Internal batch triggered', {
+          batchId: batch.batchId,
+          total: items.length,
+          succeeded: results.filter(r => !r.error).length,
+          failed: results.filter(r => r.error).length,
+        });
+
+        res.status(201).json({ success: true, data: { ...updated, results } });
+      } catch (err: any) {
+        logger.error('Internal batch trigger failed', { error: err.message });
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    // Internal batch status endpoint (service-key auth, no JWT required)
+    this.app.get('/trigger/internal/batches/:batchId', async (req, res) => {
+      const serviceKey = req.headers['x-service-key'] as string;
+      const expectedBatchKey = process.env.INTERNAL_SERVICE_KEY;
+
+      if (!expectedBatchKey || serviceKey !== expectedBatchKey) {
+        return res.status(401).json({ error: 'Invalid service key' });
+      }
+
+      const { batchId } = req.params;
+
+      try {
+        // Direct DB lookup — trusted service-to-service call, no orgId needed
+        const row = await this.db.getPool().query(
+          `SELECT b.*,
+            (SELECT json_agg(json_build_object(
+              'runId', rh.run_id, 'taskId', rh.task_identifier, 'status', rh.status,
+              'output', rh.output, 'error', rh.error_message,
+              'startedAt', rh.started_at, 'completedAt', rh.completed_at, 'durationMs', rh.duration_ms
+            )) FROM trigger.run_history rh WHERE rh.batch_id = b.batch_id) as runs
+           FROM trigger.batches b WHERE b.batch_id = $1`,
+          [batchId]
+        );
+        if (row.rows.length === 0) {
+          return res.status(404).json({ error: 'Batch not found' });
+        }
+        const batch = row.rows[0];
+        res.json({
+          success: true,
+          data: {
+            batchId: batch.batch_id,
+            name: batch.name,
+            totalRuns: parseInt(batch.total_runs || '0', 10),
+            completedRuns: parseInt(batch.completed_runs || '0', 10),
+            failedRuns: parseInt(batch.failed_runs || '0', 10),
+            status: batch.status,
+            createdAt: batch.created_at,
+            completedAt: batch.completed_at,
+            runs: batch.runs || [],
+          },
+        });
+      } catch (err: any) {
+        logger.error('Internal batch status failed', { batchId, error: err.message });
+        res.status(500).json({ error: err.message });
+      }
+    });
+
     this.app.use('/trigger/api/v1', apiRouter);
 
     logger.info('API routes mounted at /trigger/api/v1');

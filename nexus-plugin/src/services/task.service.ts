@@ -884,12 +884,49 @@ export class TaskService {
         .catch((err) => {
           logger.error('Document ingest async handler error', { taskId, runId: run.runId, error: String(err) });
         });
-    } else if (taskId === 'prosecreator-panel-analysis' || taskId === 'prosecreator-novel-import' || taskId === 'prosecreator-world-building' || taskId === 'prosecreator-document-to-research' || taskId.startsWith('prosecreator-full-ingest-')) {
-      // Panel analysis, novel import, world-building, document-to-research, and full-ingest pipeline stages use their own LLM calls.
+    } else if (
+      taskId === 'prosecreator-panel-analysis' ||
+      taskId === 'prosecreator-novel-import' ||
+      taskId === 'prosecreator-world-building' ||
+      taskId === 'prosecreator-document-to-research' ||
+      taskId.startsWith('prosecreator-full-ingest-') ||
+      // Tier 1: LLM-only tasks (job queue migration Phase 1)
+      taskId === 'prosecreator-research-generate' ||
+      taskId === 'prosecreator-research-refine' ||
+      taskId === 'prosecreator-claim-validation' ||
+      taskId === 'prosecreator-index-generation' ||
+      taskId.startsWith('prosecreator-publication-') ||
+      taskId.startsWith('prosecreator-constitution-') ||
+      taskId === 'prosecreator-character-evolution' ||
+      taskId === 'prosecreator-tts-voice-profile'
+    ) {
+      // Panel analysis, novel import, world-building, document-to-research,
+      // full-ingest pipeline stages, and all Tier 1 LLM-only tasks.
       // Route directly through Claude Max Proxy instead of the blueprint handler.
       this.handlePanelAnalysisTask(run.runId, triggerRunId, taskId, taskPayload, orgId)
         .catch((err) => {
           logger.error('Panel analysis async handler error', { taskId, runId: run.runId, error: String(err) });
+        });
+    } else if (
+      // Tier 2: Callback tasks (job queue migration Phase 2)
+      // These call back to ProseCreator's internal execute endpoint
+      // for full ServiceContainer access (generation, analysis, canvas, audiobook, forge).
+      taskId === 'prosecreator-beat-generation' ||
+      taskId === 'prosecreator-chapter-generation' ||
+      taskId === 'prosecreator-blueprint-generation' ||
+      taskId === 'prosecreator-analysis' ||
+      taskId === 'prosecreator-critique' ||
+      taskId === 'prosecreator-room-persona' ||
+      taskId === 'prosecreator-character-bible' ||
+      taskId === 'prosecreator-character-bible-section' ||
+      taskId.startsWith('prosecreator-canvas-') ||
+      taskId.startsWith('prosecreator-audiobook-') ||
+      taskId.startsWith('prosecreator-forge-') ||
+      taskId === 'prosecreator-github-scaffold-callback'
+    ) {
+      this.handleCallbackTask(run.runId, triggerRunId, taskId, taskPayload, orgId)
+        .catch((err) => {
+          logger.error('Callback task async handler error', { taskId, runId: run.runId, error: String(err) });
         });
     } else {
       // All other prosecreator tasks use the blueprint handler
@@ -1275,6 +1312,258 @@ export class TaskService {
         durationMs,
       });
     }
+  }
+
+  /**
+   * Handle Tier 2 callback tasks by calling ProseCreator's internal execute endpoint.
+   *
+   * Flow:
+   *   1. POST to ProseCreator /prosecreator/api/internal/execute with job_type + input_params
+   *   2. Poll /prosecreator/api/internal/execute/:executionId/status until completion
+   *   3. Update run status with result or error
+   *
+   * This enables Nexus Workflows to orchestrate jobs that require ProseCreator's full
+   * ServiceContainer (14 repositories, ProseGenerator, BlueprintManager, etc.).
+   */
+  private async handleCallbackTask(
+    runId: string,
+    triggerRunId: string,
+    taskId: string,
+    payload: any,
+    orgId: string,
+  ): Promise<void> {
+    const startTime = Date.now();
+    const prosecreatorUrl = process.env.PROSECREATOR_ENDPOINT
+      || 'http://nexus-prosecreator.nexus.svc.cluster.local:3000';
+    const serviceKey = process.env.NEXUS_TRIGGER_SERVICE_KEY
+      || process.env.INTERNAL_SERVICE_KEY
+      || '';
+
+    // Map task ID to ProseCreator job_type
+    const jobType = this.resolveCallbackJobType(taskId);
+
+    logger.info('Callback task starting', {
+      taskId, runId, orgId, jobType,
+      hasInputParams: !!payload?.inputParams,
+    });
+
+    try {
+      // Step 1: Submit execution request to ProseCreator
+      const submitRes = await fetch(`${prosecreatorUrl}/prosecreator/api/internal/execute`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-service-key': serviceKey,
+        },
+        body: JSON.stringify({
+          job_type: jobType,
+          input_params: payload?.inputParams || payload?.input_params || payload || {},
+          run_id: `trigger-${taskId}-${Date.now()}`,
+          user_id: payload?.userId || payload?.user_id,
+          project_id: payload?.projectId || payload?.project_id,
+        }),
+      });
+
+      if (!submitRes.ok) {
+        const errText = await submitRes.text().catch(() => '');
+        throw new Error(`ProseCreator execute failed (${submitRes.status}): ${errText.slice(0, 500)}`);
+      }
+
+      const submitData: any = await submitRes.json();
+      const executionId = submitData.execution_id || submitData.executionId || submitData.id;
+
+      if (!executionId) {
+        throw new Error(`ProseCreator returned no execution_id: ${JSON.stringify(submitData).slice(0, 500)}`);
+      }
+
+      logger.info('Callback task accepted by ProseCreator', {
+        taskId, runId, executionId, jobType,
+      });
+
+      await this.runRepo.mergeMetadata(runId, {
+        executionId,
+        jobType,
+        prosecreatorUrl,
+      }).catch(() => {});
+
+      // Step 2: Poll for completion
+      const timeoutMs = this.resolveCallbackTimeout(taskId);
+      const pollIntervalMs = timeoutMs > 900000 ? 10000 : 5000; // Longer poll for long-running tasks
+      const pollStart = Date.now();
+
+      while (Date.now() - pollStart < timeoutMs) {
+        await new Promise(r => setTimeout(r, pollIntervalMs));
+
+        try {
+          const statusRes = await fetch(
+            `${prosecreatorUrl}/prosecreator/api/internal/execute/${executionId}/status`,
+            {
+              headers: { 'x-service-key': serviceKey },
+            }
+          );
+
+          if (!statusRes.ok) {
+            logger.warn('Callback task status poll failed', {
+              taskId, runId, executionId, status: statusRes.status,
+            });
+            continue;
+          }
+
+          const statusData: any = await statusRes.json();
+          const jobStatus = statusData.status;
+
+          if (jobStatus === 'completed') {
+            const durationMs = Date.now() - startTime;
+
+            logger.info('Callback task completed', {
+              taskId, runId, orgId, executionId, jobType, durationMs,
+            });
+
+            await this.runRepo.updateStatus(runId, 'COMPLETED', {
+              content: statusData.result || statusData.output,
+              executionId,
+              jobType,
+              durationMs,
+            });
+
+            emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+              taskId, runId, triggerRunId, status: 'COMPLETED',
+            });
+
+            this.writeLog(orgId, runId, taskId, 'INFO', `Callback task completed`, {
+              durationMs, executionId, jobType,
+            });
+
+            return;
+          }
+
+          if (jobStatus === 'failed' || jobStatus === 'error') {
+            const errMsg = statusData.error || statusData.message || 'Job failed on ProseCreator';
+            throw new Error(errMsg);
+          }
+
+          // Still processing — log progress if available
+          if (statusData.progress !== undefined) {
+            logger.debug('Callback task polling', {
+              taskId, runId, executionId, jobStatus,
+              progress: statusData.progress,
+              elapsed: Date.now() - pollStart,
+            });
+          }
+        } catch (err) {
+          // Re-throw if this is a definitive failure (not a transient poll error)
+          if (err instanceof Error && (
+            err.message.includes('Job failed on ProseCreator') ||
+            err.message.includes('failed:')
+          )) {
+            throw err;
+          }
+          logger.warn('Callback task poll error, retrying', {
+            taskId, runId, executionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      // Timeout
+      throw new Error(`Callback task timed out after ${timeoutMs}ms (executionId=${executionId})`);
+
+    } catch (err: any) {
+      const durationMs = Date.now() - startTime;
+      const errMsg = err.message || String(err);
+      const structured = classifyError(err, 'prosecreator');
+
+      logger.error('Callback task failed', {
+        taskId, runId, orgId, jobType,
+        error: errMsg,
+        durationMs,
+      });
+
+      await this.runRepo.updateStatus(runId, 'FAILED', undefined, errMsg);
+      await this.runRepo.mergeMetadata(runId, {
+        structuredError: structured,
+        jobType,
+        durationMs,
+      }).catch(() => {});
+
+      this.writeLog(orgId, runId, taskId, 'ERROR', `Callback task failed: ${errMsg}`, {
+        errorCode: structured.code,
+        errorCategory: structured.category,
+        jobType,
+      });
+
+      emitToOrg(this.io, orgId, WS_EVENTS.TASK_TRIGGERED, {
+        taskId, runId, triggerRunId,
+        status: 'FAILED',
+        error: errMsg,
+        structuredError: structured,
+      });
+    }
+  }
+
+  /**
+   * Map a Tier 2 task ID to the corresponding ProseCreator job_type string.
+   * The job_type is what ProseCreator's internal execute endpoint expects.
+   */
+  private resolveCallbackJobType(taskId: string): string {
+    // Direct mappings
+    const directMap: Record<string, string> = {
+      'prosecreator-beat-generation': 'beat',
+      'prosecreator-chapter-generation': 'chapter',
+      'prosecreator-blueprint-generation': 'blueprint',
+      'prosecreator-analysis': 'analysis',
+      'prosecreator-critique': 'critique',
+      'prosecreator-room-persona': 'room_persona',
+      'prosecreator-character-bible': 'character_bible',
+      'prosecreator-character-bible-section': 'character_bible_section',
+      'prosecreator-github-scaffold-callback': 'github_repo_scaffold',
+    };
+
+    if (directMap[taskId]) return directMap[taskId];
+
+    // Prefix-based mappings: prosecreator-canvas-brainstorm -> canvas_brainstorm
+    if (taskId.startsWith('prosecreator-canvas-')) {
+      return 'canvas_' + taskId.replace('prosecreator-canvas-', '');
+    }
+    if (taskId.startsWith('prosecreator-audiobook-')) {
+      return 'audiobook_' + taskId.replace('prosecreator-audiobook-', '');
+    }
+    if (taskId.startsWith('prosecreator-forge-')) {
+      return 'forge_' + taskId.replace('prosecreator-forge-', '');
+    }
+
+    // Fallback: strip prosecreator- prefix and replace dashes with underscores
+    return taskId.replace('prosecreator-', '').replace(/-/g, '_');
+  }
+
+  /**
+   * Resolve the appropriate poll timeout for a Tier 2 callback task.
+   * Longer timeouts for generation-heavy tasks.
+   */
+  private resolveCallbackTimeout(taskId: string): number {
+    const timeouts: Record<string, number> = {
+      'prosecreator-beat-generation': 600000,        // 10 min
+      'prosecreator-chapter-generation': 1500000,    // 25 min
+      'prosecreator-blueprint-generation': 900000,   // 15 min
+      'prosecreator-character-bible': 1800000,       // 30 min
+      'prosecreator-character-bible-section': 1500000, // 25 min
+      'prosecreator-audiobook-full': 1800000,        // 30 min
+      'prosecreator-audiobook-chapter': 1500000,     // 25 min
+      'prosecreator-audiobook-assemble': 900000,     // 15 min
+      'prosecreator-audiobook-export': 900000,       // 15 min
+    };
+
+    if (timeouts[taskId]) return timeouts[taskId];
+
+    // Forge tasks: 15 min
+    if (taskId.startsWith('prosecreator-forge-')) return 900000;
+    // Canvas tasks: 5 min
+    if (taskId.startsWith('prosecreator-canvas-')) return 300000;
+    // GitHub scaffold: 15 min
+    if (taskId === 'prosecreator-github-scaffold-callback') return 900000;
+
+    // Default: 5 min
+    return 300000;
   }
 
   async batchTrigger(

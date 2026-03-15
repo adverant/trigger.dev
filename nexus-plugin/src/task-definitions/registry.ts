@@ -2,7 +2,7 @@
  * Static task definition registry.
  *
  * Since `trigger-dev-webapp` is not deployed, the "Sync Tasks" flow has
- * nothing to pull from.  Instead we seed all 50 Nexus task definitions
+ * nothing to pull from.  Instead we seed all Nexus task definitions
  * directly into the DB on startup so the Tasks page is immediately populated.
  */
 
@@ -27,7 +27,8 @@ export interface TaskRegistryEntry {
 }
 
 /**
- * All 50 Nexus task definitions organised by service.
+ * All Nexus task definitions organised by service.
+ * ProseCreator: 25 existing + 13 Tier 1 (LLM-only) + 26 Tier 2 (callback) = 64 tasks
  */
 export const TASK_REGISTRY: TaskRegistryEntry[] = [
   // ── GraphRAG (4) ────────────────────────────────────────────────────
@@ -332,7 +333,7 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
     retryConfig: { maxAttempts: 1 },
   },
 
-  // ── ProseCreator (20) ───────────────────────────────────────────────
+  // ── ProseCreator (64) ───────────────────────────────────────────────
   {
     taskIdentifier: 'prosecreator-generate-blueprint',
     description: 'Generate a living blueprint from an outline using LLM analysis',
@@ -412,6 +413,13 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
     nexusService: 'prosecreator',
     retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 600000, factor: 2 },
   },
+  // GitHub Repo Scaffold (AI README generation for series repos)
+  {
+    taskIdentifier: 'prosecreator-github-scaffold',
+    description: 'Generate AI-written README and overview files for a series GitHub repository structure via Claude Code Max proxy',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 600000, factor: 2 },
+  },
   // Full Ingestion Pipeline (8 stages)
   {
     taskIdentifier: 'prosecreator-full-ingest-analyze',
@@ -470,9 +478,294 @@ export const TASK_REGISTRY: TaskRegistryEntry[] = [
   // Document Ingestion via FileProcess (batch parallel)
   {
     taskIdentifier: 'prosecreator-document-ingest',
-    description: 'Process documents through FileProcess SmartRouter for OCR, entity extraction, and GraphRAG storage \u2014 supports batch parallel execution',
+    description: 'Process documents through FileProcess SmartRouter for OCR, entity extraction, and GraphRAG storage — supports batch parallel execution',
     nexusService: 'prosecreator',
     retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 300000, factor: 2 },
+  },
+
+  // ── ProseCreator Tier 1: LLM-only tasks (job queue migration Phase 1) ──
+  {
+    taskIdentifier: 'prosecreator-research-generate',
+    description: 'Generate a structured research brief from project context and topic via LLM',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 3, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-research',
+  },
+  {
+    taskIdentifier: 'prosecreator-research-refine',
+    description: 'Refine an existing research brief with additional context or focus areas',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 3, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-research',
+  },
+  {
+    taskIdentifier: 'prosecreator-claim-validation',
+    description: 'Validate factual claims in manuscript content against research briefs via LLM',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
+    queueName: 'prosecreator-research',
+  },
+  {
+    taskIdentifier: 'prosecreator-index-generation',
+    description: 'Generate a book index from manuscript content — topics, names, locations',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-publication',
+  },
+  {
+    taskIdentifier: 'prosecreator-publication-copyright',
+    description: 'Generate copyright page content for publication via LLM',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 120000, factor: 2 },
+    queueName: 'prosecreator-publication',
+  },
+  {
+    taskIdentifier: 'prosecreator-publication-about',
+    description: 'Generate "About the Author" section for publication via LLM',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 120000, factor: 2 },
+    queueName: 'prosecreator-publication',
+  },
+  {
+    taskIdentifier: 'prosecreator-publication-blurb',
+    description: 'Generate marketing blurb / back-cover copy for publication via LLM',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 120000, factor: 2 },
+    queueName: 'prosecreator-publication',
+  },
+  {
+    taskIdentifier: 'prosecreator-publication-matter',
+    description: 'Generate front/back matter sections (dedication, acknowledgements) via LLM',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 120000, factor: 2 },
+    queueName: 'prosecreator-publication',
+  },
+  {
+    taskIdentifier: 'prosecreator-publication-readiness',
+    description: 'Assess publication readiness — completeness, quality gates, formatting checks',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
+    queueName: 'prosecreator-publication',
+  },
+  {
+    taskIdentifier: 'prosecreator-constitution-generate',
+    description: 'Generate a full project constitution — voice, rules, constraints, style guide via LLM',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-constitution-section',
+    description: 'Generate or update a single section of the project constitution via LLM',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
+  },
+  {
+    taskIdentifier: 'prosecreator-character-evolution',
+    description: 'Analyze character evolution across chapters — trait changes, arc progression, relationship dynamics',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 600000, factor: 2 },
+    queueName: 'prosecreator-analysis',
+  },
+  {
+    taskIdentifier: 'prosecreator-tts-voice-profile',
+    description: 'Generate a TTS voice profile for a character — prosody, pace, pitch, emotion mapping',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 180000, factor: 2 },
+  },
+
+  // ── ProseCreator Tier 2: Callback tasks (job queue migration Phase 2) ──
+  {
+    taskIdentifier: 'prosecreator-beat-generation',
+    description: 'Generate a single beat (scene) via ProseCreator pipeline — ProseGenerator, ContextInjector, AntiAIDetection, VoiceConsistency',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 3, minTimeoutInMs: 5000, maxTimeoutInMs: 600000, factor: 2 },
+    queueName: 'prosecreator-generation',
+  },
+  {
+    taskIdentifier: 'prosecreator-chapter-generation',
+    description: 'Generate a full chapter — orchestrates beat generations, word count rollup, plot thread seeding',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 10000, maxTimeoutInMs: 1500000, factor: 2 },
+    queueName: 'prosecreator-generation',
+  },
+  {
+    taskIdentifier: 'prosecreator-blueprint-generation',
+    description: 'Generate a living blueprint — BlueprintManager, entity extraction, JSON repair (callback)',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+    queueName: 'prosecreator-generation',
+  },
+  {
+    taskIdentifier: 'prosecreator-analysis',
+    description: 'Run analysis on manuscript — 6 subtypes (continuity, style, pacing, character, plot holes, AI detection)',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-analysis',
+  },
+  {
+    taskIdentifier: 'prosecreator-critique',
+    description: 'Run a persona-based critique session on manuscript content',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-analysis',
+  },
+  {
+    taskIdentifier: 'prosecreator-room-persona',
+    description: 'Invoke a Writers Room persona for in-character feedback or dialogue',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-analysis',
+  },
+  {
+    taskIdentifier: 'prosecreator-character-bible',
+    description: 'Generate full character bible — profile, voice fingerprint, relationship map, arc outline (30 min timeout)',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 10000, maxTimeoutInMs: 1800000, factor: 2 },
+    queueName: 'prosecreator-analysis',
+  },
+  {
+    taskIdentifier: 'prosecreator-character-bible-section',
+    description: 'Generate a single character bible section (backstory, voice, motivations)',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 1500000, factor: 2 },
+    queueName: 'prosecreator-analysis',
+  },
+  // Canvas tasks (9 types)
+  {
+    taskIdentifier: 'prosecreator-canvas-brainstorm',
+    description: 'Canvas: generate ideas for a story element',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-canvas',
+  },
+  {
+    taskIdentifier: 'prosecreator-canvas-expand',
+    description: 'Canvas: elaborate on a story element node',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-canvas',
+  },
+  {
+    taskIdentifier: 'prosecreator-canvas-connect',
+    description: 'Canvas: find relationships between story elements',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-canvas',
+  },
+  {
+    taskIdentifier: 'prosecreator-canvas-challenge',
+    description: 'Canvas: generate "what if" scenarios and contradictions',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-canvas',
+  },
+  {
+    taskIdentifier: 'prosecreator-canvas-synthesize',
+    description: 'Canvas: merge multiple nodes into a coherent summary',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-canvas',
+  },
+  {
+    taskIdentifier: 'prosecreator-canvas-research',
+    description: 'Canvas: generate research notes for a story element',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-canvas',
+  },
+  {
+    taskIdentifier: 'prosecreator-canvas-outline',
+    description: 'Canvas: generate a structured outline from canvas elements',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-canvas',
+  },
+  {
+    taskIdentifier: 'prosecreator-canvas-critique',
+    description: 'Canvas: provide feedback on narrative quality of a canvas node',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-canvas',
+  },
+  {
+    taskIdentifier: 'prosecreator-canvas-transform',
+    description: 'Canvas: convert a story element from one form to another',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 3000, maxTimeoutInMs: 300000, factor: 2 },
+    queueName: 'prosecreator-canvas',
+  },
+  // Audiobook tasks (4 types)
+  {
+    taskIdentifier: 'prosecreator-audiobook-full',
+    description: 'Generate full audiobook — TTS for all chapters, assembly, metadata (30 min timeout)',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 10000, maxTimeoutInMs: 1800000, factor: 2 },
+    queueName: 'prosecreator-audiobook',
+  },
+  {
+    taskIdentifier: 'prosecreator-audiobook-chapter',
+    description: 'Generate TTS audio for a single chapter',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 1500000, factor: 2 },
+    queueName: 'prosecreator-audiobook',
+  },
+  {
+    taskIdentifier: 'prosecreator-audiobook-assemble',
+    description: 'Assemble individual chapter audio files into a complete audiobook',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+    queueName: 'prosecreator-audiobook',
+  },
+  {
+    taskIdentifier: 'prosecreator-audiobook-export',
+    description: 'Export assembled audiobook to final format (M4B, MP3 chapters)',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+    queueName: 'prosecreator-audiobook',
+  },
+  // Forge tasks (5 phases)
+  {
+    taskIdentifier: 'prosecreator-forge-outline',
+    description: 'Forge: outline generation from user brief',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+    queueName: 'prosecreator-generation',
+  },
+  {
+    taskIdentifier: 'prosecreator-forge-draft',
+    description: 'Forge: draft generation from approved outline',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+    queueName: 'prosecreator-generation',
+  },
+  {
+    taskIdentifier: 'prosecreator-forge-revise',
+    description: 'Forge: revision pass on draft',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+    queueName: 'prosecreator-generation',
+  },
+  {
+    taskIdentifier: 'prosecreator-forge-polish',
+    description: 'Forge: polish pass — final grammar, style, voice refinement',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+    queueName: 'prosecreator-generation',
+  },
+  {
+    taskIdentifier: 'prosecreator-forge-finalize',
+    description: 'Forge: final quality check and formatting',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+    queueName: 'prosecreator-generation',
+  },
+  // GitHub Scaffold (Tier 2 callback)
+  {
+    taskIdentifier: 'prosecreator-github-scaffold-callback',
+    description: 'Generate series GitHub repo scaffold via callback — loads data, generates AI READMEs, git push',
+    nexusService: 'prosecreator',
+    retryConfig: { maxAttempts: 2, minTimeoutInMs: 5000, maxTimeoutInMs: 900000, factor: 2 },
+    queueName: 'prosecreator-generation',
   },
 
   // ── Sandbox (4) ─────────────────────────────────────────────────────
